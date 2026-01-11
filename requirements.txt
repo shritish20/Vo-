@@ -1,0 +1,8 @@
+requests>=2.31.0
+pandas>=2.0.0
+numpy>=1.24.0
+pytz>=2023.3
+arch>=5.5.0
+upstox-python-sdk>=2.19.0
+scipy>=1.10.0
+psutil>=5.9.0
