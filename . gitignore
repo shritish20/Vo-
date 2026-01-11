@@ -1,0 +1,18 @@
+# Ignore Environment Variables (Secrets)
+.env
+.env.*
+
+# Ignore Database and Logs (Generated automatically)
+volguard_data/
+volguard_logs/
+*.db
+*.log
+*.sqlite
+
+# Ignore Python Cache
+__pycache__/
+*.pyc
+
+# Ignore Docker/System junk
+.DS_Store
+Thumbs.db
