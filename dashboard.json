@@ -1,4 +1,14 @@
 {
+  "__inputs": [
+    {
+      "name": "DS_SQLITE",
+      "label": "Select your SQLite Data Source",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "frser-sqlite-datasource",
+      "pluginName": "SQLite"
+    }
+  ],
   "annotations": {
     "list": []
   },
@@ -12,7 +22,7 @@
     {
       "datasource": {
         "type": "frser-sqlite-datasource",
-        "uid": "sqlite_volguard"
+        "uid": "${DS_SQLITE}"
       },
       "fieldConfig": {
         "defaults": {
@@ -78,7 +88,7 @@
         {
           "datasource": {
             "type": "frser-sqlite-datasource",
-            "uid": "sqlite_volguard"
+            "uid": "${DS_SQLITE}"
           },
           "queryText": "SELECT (strftime('%s', 'now', 'localtime') - strftime('%s', updated_at)) as lag FROM system_state WHERE key = 'system_vitals'",
           "queryType": "table",
@@ -93,7 +103,7 @@
     {
       "datasource": {
         "type": "frser-sqlite-datasource",
-        "uid": "sqlite_volguard"
+        "uid": "${DS_SQLITE}"
       },
       "fieldConfig": {
         "defaults": {
@@ -141,7 +151,7 @@
         {
           "datasource": {
             "type": "frser-sqlite-datasource",
-            "uid": "sqlite_volguard"
+            "uid": "${DS_SQLITE}"
           },
           "queryText": "SELECT json_extract(value, '$.latency') as latency FROM system_state WHERE key = 'system_vitals'",
           "queryType": "table",
@@ -155,7 +165,7 @@
     {
       "datasource": {
         "type": "frser-sqlite-datasource",
-        "uid": "sqlite_volguard"
+        "uid": "${DS_SQLITE}"
       },
       "fieldConfig": {
         "defaults": {
@@ -202,7 +212,7 @@
         {
           "datasource": {
             "type": "frser-sqlite-datasource",
-            "uid": "sqlite_volguard"
+            "uid": "${DS_SQLITE}"
           },
           "queryText": "SELECT json_extract(value, '$.pnl') as pnl FROM system_state WHERE key = 'live_portfolio'",
           "queryType": "table",
@@ -216,7 +226,7 @@
     {
       "datasource": {
         "type": "frser-sqlite-datasource",
-        "uid": "sqlite_volguard"
+        "uid": "${DS_SQLITE}"
       },
       "fieldConfig": {
         "defaults": {
@@ -267,7 +277,7 @@
         {
           "datasource": {
             "type": "frser-sqlite-datasource",
-            "uid": "sqlite_volguard"
+            "uid": "${DS_SQLITE}"
           },
           "queryText": "SELECT strategy_type, count(*) as count FROM trades WHERE status='OPEN' GROUP BY strategy_type",
           "queryType": "table",
@@ -281,7 +291,7 @@
     {
       "datasource": {
         "type": "frser-sqlite-datasource",
-        "uid": "sqlite_volguard"
+        "uid": "${DS_SQLITE}"
       },
       "fieldConfig": {
         "defaults": {
@@ -356,7 +366,7 @@
         {
           "datasource": {
             "type": "frser-sqlite-datasource",
-            "uid": "sqlite_volguard"
+            "uid": "${DS_SQLITE}"
           },
           "queryText": "SELECT updated_at as time, json_extract(value, '$.cpu') as CPU FROM system_state WHERE key = 'system_vitals' ORDER BY updated_at DESC LIMIT 100",
           "queryType": "table",
@@ -366,7 +376,7 @@
         {
           "datasource": {
             "type": "frser-sqlite-datasource",
-            "uid": "sqlite_volguard"
+            "uid": "${DS_SQLITE}"
           },
           "queryText": "SELECT updated_at as time, json_extract(value, '$.ram') as RAM FROM system_state WHERE key = 'system_vitals' ORDER BY updated_at DESC LIMIT 100",
           "queryType": "table",
@@ -380,7 +390,7 @@
     {
       "datasource": {
         "type": "frser-sqlite-datasource",
-        "uid": "sqlite_volguard"
+        "uid": "${DS_SQLITE}"
       },
       "fieldConfig": {
         "defaults": {
@@ -425,7 +435,7 @@
         {
           "datasource": {
             "type": "frser-sqlite-datasource",
-            "uid": "sqlite_volguard"
+            "uid": "${DS_SQLITE}"
           },
           "queryText": "SELECT time(timestamp) as Time, strategy_type as Strategy, entry_premium as Premium, status as Status FROM trades ORDER BY timestamp DESC LIMIT 10",
           "queryType": "table",
