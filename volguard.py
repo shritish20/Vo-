@@ -933,7 +933,9 @@ class AnalyticsEngine:
             if chain.empty or spot == 0:
                 return 0
             atm_idx = (chain['strike'] - spot).abs().argsort()[:1]
-            return chain.iloc[atm_idx]['ce_iv'].values[0]
+            row = chain.iloc[atm_idx].iloc[0]
+            # Average of CE and PE IV at ATM strike
+            return (row['ce_iv'] + row['pe_iv']) / 2
         
         iv_weekly = get_atm_iv(weekly_chain)
         iv_monthly = get_atm_iv(monthly_chain)
