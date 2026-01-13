@@ -1,5 +1,9 @@
 """
-VOLGUARD 2.0 
+VOLGUARD 2.0 - Production Trading System
+Version: 42.4 (CRITICAL FIXES)
+- Fixed WebSocket dictionary iteration crash
+- Fixed Risk Manager blind spot (LTP not updating)
+- Changed mode to option_chain for both Greeks + LTP
 """
 
 import os
@@ -90,7 +94,7 @@ class ProductionConfig:
     SLIPPAGE_TOLERANCE = 0.02
     PARTIAL_FILL_TOLERANCE = 0.90
     ORDER_TIMEOUT = 10
-    MAX_BID_ASK_SPREAD = 0.05  # 5% Max Spread allowed
+    MAX_BID_ASK_SPREAD = 0.05
     
     # System
     POLL_INTERVAL = 1.0
@@ -396,7 +400,7 @@ class SessionManager:
             return False
 
 # ==========================================
-# UPSTOX API CLIENT
+# UPSTOX API CLIENT (FIXED)
 # ==========================================
 class UpstoxAPIClient:
     def __init__(self):
@@ -470,7 +474,6 @@ class UpstoxAPIClient:
             response = api_instance.place_gtt_order(body)
             logger.info(f"GTT PLACED: {side} {qty}x {instrument_key}")
             
-            # v42.4 Fix: Handle List Response
             if response.data and hasattr(response.data, 'gtt_order_ids') and response.data.gtt_order_ids:
                 return response.data.gtt_order_ids[0]
             return getattr(response.data, 'gtt_order_id', None)
@@ -499,33 +502,61 @@ class UpstoxAPIClient:
         """v42.4: Heartbeat Check"""
         with self.streamer_lock:
             last_time = self.latest_prices.get('_last_update_ts', 0)
-            # If no data for 10 seconds, socket is dead
             if time.time() - last_time > 10: return False
             return True
 
     def start_market_stream(self, instruments: List[str]):
-        if self.market_streamer is not None: return # Prevent Explosion
+        """CRITICAL FIX: Changed to option_chain mode and fixed dictionary parsing"""
+        if self.market_streamer is not None: return
 
         try:
             def on_message(message):
                 with self.streamer_lock:
-                    self.latest_prices['_last_update_ts'] = time.time() # Heartbeat
-                    for feed in message.get('feeds', {}):
-                        key = feed.get('instrument_key')
-                        if key and 'ltpc' in feed:
-                            self.latest_prices[key] = feed['ltpc'].get('ltp', 0)
-                        if key and 'option_greeks' in feed:
-                            self.latest_prices[f"{key}_greeks"] = feed['option_greeks']
+                    self.latest_prices['_last_update_ts'] = time.time()
+                    
+                    # FIX 1: Handle 'feeds' as a Dictionary (key -> feed_data)
+                    feeds = message.get('feeds', {})
+                    for key, feed_data in feeds.items():
+                        
+                        # FIX 2: Extract LTP (Critical for Risk Manager)
+                        # Upstox V3 can nest data in 'fullFeed' or directly in feed_data
+                        if 'ltpc' in feed_data:
+                            ltp = feed_data['ltpc'].get('ltp', 0)
+                            if ltp > 0:
+                                self.latest_prices[key] = ltp
+                        elif 'fullFeed' in feed_data and 'ltpc' in feed_data['fullFeed']:
+                            ltp = feed_data['fullFeed']['ltpc'].get('ltp', 0)
+                            if ltp > 0:
+                                self.latest_prices[key] = ltp
+                        
+                        # FIX 3: Extract Greeks
+                        greeks = None
+                        if 'optionGreeks' in feed_data:
+                            greeks = feed_data['optionGreeks']
+                        elif 'fullFeed' in feed_data and 'optionGreeks' in feed_data['fullFeed']:
+                            greeks = feed_data['fullFeed']['optionGreeks']
+                        
+                        if greeks:
+                            self.latest_prices[f"{key}_greeks"] = greeks
             
-            def on_open(): logger.info("WebSocket Connected (Greeks Mode)")
+            def on_open(): 
+                logger.info("✅ WebSocket Connected (option_chain mode - LTP + Greeks)")
             
+            def on_error(error):
+                logger.error(f"WebSocket Error: {error}")
+            
+            # FIX 4: Changed mode from "option_greeks" to "option_chain"
+            # This ensures we get BOTH LTP and Greeks
             self.market_streamer = upstox_client.MarketDataStreamerV3(
-                self.api_client, instruments, mode="option_greeks"
+                self.api_client, instruments, mode="option_chain"
             )
             self.market_streamer.on("message", on_message)
             self.market_streamer.on("open", on_open)
+            self.market_streamer.on("error", on_error)
+            
             threading.Thread(target=self.market_streamer.connect, daemon=True).start()
             time.sleep(2)
+            logger.info("WebSocket initialization complete")
         except Exception as e:
             logger.error(f"WebSocket start failed: {e}")
     
@@ -578,7 +609,6 @@ class UpstoxAPIClient:
                     'pe_oi': x['put_options']['market_data']['oi'],
                     'ce_ltp': x['call_options']['market_data']['ltp'],
                     'pe_ltp': x['put_options']['market_data']['ltp'],
-                    # v42.4: Bid/Ask for Liquidity
                     'ce_bid': x['call_options']['market_data'].get('bid_price', 0),
                     'ce_ask': x['call_options']['market_data'].get('ask_price', 0),
                     'pe_bid': x['put_options']['market_data'].get('bid_price', 0),
@@ -809,7 +839,7 @@ class AnalyticsEngine:
             if chain.empty or spot == 0: return 0
             atm_idx = (chain['strike'] - spot).abs().argsort()[:1]
             row = chain.iloc[atm_idx].iloc[0]
-            return (row['ce_iv'] + row['pe_iv']) / 2 # v42.4: Avg IV
+            return (row['ce_iv'] + row['pe_iv']) / 2
         
         iv_weekly = get_atm_iv(weekly_chain)
         iv_monthly = get_atm_iv(monthly_chain)
@@ -956,7 +986,7 @@ class RegimeEngine:
         )
 
 # ==========================================
-# STRATEGY FACTORY (v42.4 - Liquidity Safe)
+# STRATEGY FACTORY
 # ==========================================
 class StrategyFactory:
     def __init__(self, api: UpstoxAPIClient):
@@ -987,7 +1017,6 @@ class StrategyFactory:
                 'type': type_
             }
         
-        # v42.4 Fix: ABORT if no liquidity found
         logger.critical(f"NO LIQUID STRIKES FOUND for {type_}. Aborting.")
         telegram.send(f"⚠️ LIQUIDITY DRY: No {type_} strikes within limit.", "CRITICAL")
         return None
@@ -1133,7 +1162,7 @@ class ExecutionEngine:
             self.api.place_order(leg['key'], leg['filled_qty'], side, "MARKET", 0)
 
 # ==========================================
-# RISK MANAGER (v42.4 - Robust Exits)
+# RISK MANAGER (FIXED - Now receives LTP)
 # ==========================================
 class RiskManager:
     def __init__(self, api: UpstoxAPIClient, legs, expiry_date):
@@ -1327,7 +1356,6 @@ class TradingOrchestrator:
                 if not (ProductionConfig.SAFE_ENTRY_START <= (now.hour, now.minute) <= ProductionConfig.SAFE_EXIT_END):
                     logger.debug("Outside trading hours"); time.sleep(600); continue
                 
-                # v42.4: WebSocket Heartbeat
                 if not self.api.check_socket_health():
                     logger.warning("WebSocket Stale. Restarting...")
                     self.api.market_streamer = None
@@ -1360,7 +1388,7 @@ class TradingOrchestrator:
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="VOLGUARD v42.4")
+    parser = argparse.ArgumentParser(description="VOLGUARD v42.4 - FIXED")
     parser.add_argument('--mode', choices=['analysis', 'auto'], default='analysis')
     args = parser.parse_args()
     
@@ -1370,9 +1398,9 @@ def main():
     except Exception as e:
         logger.critical(f"Configuration error: {e}"); sys.exit(1)
     
-    db.set_state("system_version", "42.4")
+    db.set_state("system_version", "42.4-FIXED")
     logger.info("Database initialized (WAL Mode enabled)")
-    telegram.send("System startup successful (v42.4 - Golden Master)", "SUCCESS")
+    telegram.send("System startup successful (v42.4 - WebSocket FIXED)", "SUCCESS")
     orchestrator = TradingOrchestrator()
     
     try:
