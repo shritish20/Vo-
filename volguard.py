@@ -1,10 +1,11 @@
 """
-VOLGUARD 2.0 - Production Trading System
-Version: 42.5 (CRITICAL FIXES - COMPLETE)
-- Fixed WebSocket mode (full instead of option_chain)
-- Fixed DataFrame boolean ambiguity
-- Fixed dictionary iteration crash
-- Fixed Risk Manager LTP updates
+VOLGUARD 2.0 - Production Trading System (FULLY CORRECTED)
+Version: 42.5 (ALL 5 CRITICAL FIXES APPLIED)
+- FIX #1: Product Code 'M' -> 'D' 
+- FIX #2: WebSocket Dynamic Subscription for Trade Legs
+- FIX #3: Order Status Parsing (response.data.status)
+- FIX #4: GTT Trigger Logic (ABOVE/BELOW not IMMEDIATE)
+- FIX #5: Funds Dictionary Access
 """
 
 import os
@@ -33,7 +34,6 @@ import pytz
 from arch import arch_model
 import psutil
 
-# Upstox SDK
 import upstox_client
 from upstox_client.rest import ApiException
 
@@ -43,24 +43,20 @@ from upstox_client.rest import ApiException
 class ProductionConfig:
     ENVIRONMENT = os.getenv("VG_ENV", "PRODUCTION")
     
-    # API Credentials
     UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN")
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
     
-    # Session
     UPSTOX_CLIENT_ID = os.getenv("UPSTOX_CLIENT_ID")
     UPSTOX_CLIENT_SECRET = os.getenv("UPSTOX_CLIENT_SECRET")
     UPSTOX_REDIRECT_URI = os.getenv("UPSTOX_REDIRECT_URI")
     UPSTOX_REFRESH_TOKEN = os.getenv("UPSTOX_REFRESH_TOKEN")
     
-    # Endpoints
     API_V2 = "https://api.upstox.com/v2"
     API_V3 = "https://api.upstox.com/v3"
     NIFTY_KEY = "NSE_INDEX|Nifty 50"
     VIX_KEY = "NSE_INDEX|India VIX"
     
-    # Capital & Risk
     BASE_CAPITAL = int(os.getenv("VG_BASE_CAPITAL", "1000000"))
     MARGIN_SELL_BASE = 125000
     MARGIN_BUY_BASE = 30000
@@ -68,7 +64,6 @@ class ProductionConfig:
     DAILY_LOSS_LIMIT = 0.03
     MAX_POSITION_SIZE = 0.25
     
-    # Advanced Risk
     GAMMA_DANGER_DTE = 1
     GEX_STICKY_RATIO = 0.03
     HIGH_VOL_IVP = 75.0
@@ -76,18 +71,15 @@ class ProductionConfig:
     VOV_CRASH_ZSCORE = 2.5
     VOV_WARNING_ZSCORE = 2.0
     
-    # Scoring
     WEIGHT_VOL = 0.40
     WEIGHT_STRUCT = 0.30
     WEIGHT_EDGE = 0.20
     WEIGHT_RISK = 0.10
     
-    # Thresholds
     FII_STRONG_LONG = 50000
     FII_STRONG_SHORT = -50000
     FII_MODERATE = 20000
     
-    # Execution
     TARGET_PROFIT_PCT = 0.50
     STOP_LOSS_PCT = 1.0
     MAX_SHORT_DELTA = 0.35
@@ -97,25 +89,21 @@ class ProductionConfig:
     ORDER_TIMEOUT = 10
     MAX_BID_ASK_SPREAD = 0.05
     
-    # System
     POLL_INTERVAL = 1.0
     ANALYSIS_INTERVAL = 1800
     MAX_API_RETRIES = 3
     DASHBOARD_REFRESH_RATE = 1.0
     
-    # Infrastructure
     DB_PATH = os.getenv("VG_DB_PATH", "/app/data/volguard.db")
     LOG_DIR = os.getenv("VG_LOG_DIR", "/app/logs")
     LOG_FILE = os.path.join(LOG_DIR, f"volguard_{ENVIRONMENT.lower()}.log")
     LOG_LEVEL = logging.INFO
     
-    # Market Hours
     MARKET_OPEN = (9, 15)
     MARKET_CLOSE = (15, 30)
     SAFE_ENTRY_START = (9, 45)
     SAFE_EXIT_END = (15, 15)
     
-    # Breakers
     MAX_CONSECUTIVE_LOSSES = 3
     COOL_DOWN_PERIOD = 86400
     MAX_SLIPPAGE_EVENTS_PER_DAY = 5
@@ -132,15 +120,9 @@ class ProductionConfig:
 # LOGGING
 # ==========================================
 os.makedirs(ProductionConfig.LOG_DIR, exist_ok=True)
-file_handler = RotatingFileHandler(
-    ProductionConfig.LOG_FILE, maxBytes=10*1024*1024, backupCount=5
-)
+file_handler = RotatingFileHandler(ProductionConfig.LOG_FILE, maxBytes=10*1024*1024, backupCount=5)
 stream_handler = logging.StreamHandler(sys.stdout)
-logging.basicConfig(
-    level=ProductionConfig.LOG_LEVEL,
-    format='%(asctime)s | %(levelname)-8s | %(message)s',
-    handlers=[file_handler, stream_handler]
-)
+logging.basicConfig(level=ProductionConfig.LOG_LEVEL, format='%(asctime)s | %(levelname)-8s | %(message)s', handlers=[file_handler, stream_handler])
 logger = logging.getLogger("VOLGUARD")
 
 # ==========================================
@@ -153,18 +135,11 @@ class TelegramAlerter:
         self.base_url = f"https://api.telegram.org/bot{self.bot_token}"
     
     def send(self, message: str, level: str = "INFO"):
-        emoji_map = {
-            "CRITICAL": "🚨", "ERROR": "❌", "WARNING": "⚠️",
-            "INFO": "ℹ️", "SUCCESS": "✅", "TRADE": "💰", "SYSTEM": "⚙️"
-        }
+        emoji_map = {"CRITICAL": "🚨", "ERROR": "❌", "WARNING": "⚠️", "INFO": "ℹ️", "SUCCESS": "✅", "TRADE": "💰", "SYSTEM": "⚙️"}
         prefix = emoji_map.get(level, "📢")
         full_msg = f"{prefix} *VOLGUARD v42.5*\n{message}"
         try:
-            requests.post(
-                f"{self.base_url}/sendMessage",
-                json={"chat_id": self.chat_id, "text": full_msg, "parse_mode": "Markdown"},
-                timeout=5
-            )
+            requests.post(f"{self.base_url}/sendMessage", json={"chat_id": self.chat_id, "text": full_msg, "parse_mode": "Markdown"}, timeout=5)
         except Exception as e:
             logger.error(f"Telegram send failed: {e}")
 
@@ -185,75 +160,28 @@ class DatabaseManager:
     
     def _init_schema(self):
         schema = """
-        CREATE TABLE IF NOT EXISTS trades (
-            trade_id TEXT PRIMARY KEY,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            strategy_type TEXT,
-            expiry_date DATE,
-            entry_premium REAL,
-            max_risk REAL,
-            status TEXT,
-            legs_json TEXT
-        );
-        CREATE TABLE IF NOT EXISTS positions (
-            position_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            trade_id TEXT,
-            instrument_key TEXT,
-            strike REAL,
-            option_type TEXT,
-            side TEXT,
-            qty INTEGER,
-            entry_price REAL,
-            current_price REAL,
-            delta REAL,
-            status TEXT
-        );
-        CREATE TABLE IF NOT EXISTS risk_events (
-            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            event_type TEXT,
-            severity TEXT,
-            description TEXT,
-            action_taken TEXT
-        );
-        CREATE TABLE IF NOT EXISTS system_state (
-            key TEXT PRIMARY KEY,
-            value TEXT,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
+        CREATE TABLE IF NOT EXISTS trades (trade_id TEXT PRIMARY KEY, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, strategy_type TEXT, expiry_date DATE, entry_premium REAL, max_risk REAL, status TEXT, legs_json TEXT);
+        CREATE TABLE IF NOT EXISTS positions (position_id INTEGER PRIMARY KEY AUTOINCREMENT, trade_id TEXT, instrument_key TEXT, strike REAL, option_type TEXT, side TEXT, qty INTEGER, entry_price REAL, current_price REAL, delta REAL, status TEXT);
+        CREATE TABLE IF NOT EXISTS risk_events (event_id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, event_type TEXT, severity TEXT, description TEXT, action_taken TEXT);
+        CREATE TABLE IF NOT EXISTS system_state (key TEXT PRIMARY KEY, value TEXT, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
         """
         self.conn.executescript(schema)
         self.conn.commit()
     
     def save_trade(self, trade_id, strategy, expiry, legs, entry_premium, max_risk):
-        self.conn.execute("""
-            INSERT INTO trades (trade_id, strategy_type, expiry_date, 
-                              entry_premium, max_risk, status, legs_json)
-            VALUES (?, ?, ?, ?, ?, 'OPEN', ?)
-        """, (trade_id, strategy, expiry, entry_premium, max_risk, json.dumps(legs)))
+        self.conn.execute("INSERT INTO trades (trade_id, strategy_type, expiry_date, entry_premium, max_risk, status, legs_json) VALUES (?, ?, ?, ?, ?, 'OPEN', ?)", (trade_id, strategy, expiry, entry_premium, max_risk, json.dumps(legs)))
         self.conn.commit()
     
     def log_risk_event(self, event_type, severity, desc, action):
-        self.conn.execute("""
-            INSERT INTO risk_events (event_type, severity, description, action_taken)
-            VALUES (?, ?, ?, ?)
-        """, (event_type, severity, desc, action))
+        self.conn.execute("INSERT INTO risk_events (event_type, severity, description, action_taken) VALUES (?, ?, ?, ?)", (event_type, severity, desc, action))
         self.conn.commit()
     
     def set_state(self, key, value):
-        self.conn.execute("""
-            INSERT OR REPLACE INTO system_state (key, value, updated_at)
-            VALUES (?, ?, CURRENT_TIMESTAMP)
-        """, (key, value))
+        self.conn.execute("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)", (key, value))
         self.conn.commit()
     
     def update_system_vitals(self, latency_ms, cpu_usage, ram_usage):
-        vitals = {
-            "latency": round(latency_ms, 2),
-            "cpu": round(cpu_usage, 1),
-            "ram": round(ram_usage, 1),
-            "updated_at": datetime.now().strftime("%H:%M:%S")
-        }
+        vitals = {"latency": round(latency_ms, 2), "cpu": round(cpu_usage, 1), "ram": round(ram_usage, 1), "updated_at": datetime.now().strftime("%H:%M:%S")}
         self.set_state("system_vitals", json.dumps(vitals))
 
 db = DatabaseManager()
@@ -301,56 +229,35 @@ circuit_breaker = CircuitBreaker()
 # ==========================================
 @dataclass
 class TimeMetrics:
-    current_date: date; weekly_exp: date; monthly_exp: date
-    next_weekly_exp: date; dte_weekly: int; dte_monthly: int
-    is_gamma_week: bool; is_gamma_month: bool; days_to_next_weekly: int
+    current_date: date; weekly_exp: date; monthly_exp: date; next_weekly_exp: date; dte_weekly: int; dte_monthly: int; is_gamma_week: bool; is_gamma_month: bool; days_to_next_weekly: int
 
 @dataclass
 class VolMetrics:
-    spot: float; vix: float; rv7: float; rv28: float; rv90: float
-    garch7: float; garch28: float; park7: float; park28: float
-    vov: float; vov_zscore: float; ivp_30d: float; ivp_90d: float; ivp_1yr: float
-    ma20: float; atr14: float; trend_strength: float
-    vol_regime: str; is_fallback: bool
+    spot: float; vix: float; rv7: float; rv28: float; rv90: float; garch7: float; garch28: float; park7: float; park28: float; vov: float; vov_zscore: float; ivp_30d: float; ivp_90d: float; ivp_1yr: float; ma20: float; atr14: float; trend_strength: float; vol_regime: str; is_fallback: bool
 
 @dataclass
 class StructMetrics:
-    net_gex: float; gex_ratio: float; total_oi_value: float
-    gex_regime: str; pcr: float; max_pain: float
-    skew_25d: float; oi_regime: str; lot_size: int
+    net_gex: float; gex_ratio: float; total_oi_value: float; gex_regime: str; pcr: float; max_pain: float; skew_25d: float; oi_regime: str; lot_size: int
 
 @dataclass
 class EdgeMetrics:
-    iv_weekly: float; vrp_rv_weekly: float; vrp_garch_weekly: float; vrp_park_weekly: float
-    iv_monthly: float; vrp_rv_monthly: float; vrp_garch_monthly: float; vrp_park_monthly: float
-    term_spread: float; term_regime: str; primary_edge: str
+    iv_weekly: float; vrp_rv_weekly: float; vrp_garch_weekly: float; vrp_park_weekly: float; iv_monthly: float; vrp_rv_monthly: float; vrp_garch_monthly: float; vrp_park_monthly: float; term_spread: float; term_regime: str; primary_edge: str
 
 @dataclass
 class ParticipantData:
-    fut_long: float; fut_short: float; fut_net: float
-    call_long: float; call_short: float; call_net: float
-    put_long: float; put_short: float; put_net: float
-    stock_net: float
+    fut_long: float; fut_short: float; fut_net: float; call_long: float; call_short: float; call_net: float; put_long: float; put_short: float; put_net: float; stock_net: float
 
 @dataclass
 class ExternalMetrics:
-    fii: Optional[ParticipantData]; dii: Optional[ParticipantData]
-    pro: Optional[ParticipantData]; client: Optional[ParticipantData]
-    fii_net_change: float; flow_regime: str; fast_vol: bool; data_date: str
+    fii: Optional[ParticipantData]; dii: Optional[ParticipantData]; pro: Optional[ParticipantData]; client: Optional[ParticipantData]; fii_net_change: float; flow_regime: str; fast_vol: bool; data_date: str
 
 @dataclass
 class RegimeScore:
-    vol_score: float; struct_score: float; edge_score: float; risk_score: float
-    composite: float; confidence: str
+    vol_score: float; struct_score: float; edge_score: float; risk_score: float; composite: float; confidence: str
 
 @dataclass
 class TradingMandate:
-    expiry_type: str; expiry_date: date; dte: int
-    regime_name: str; strategy_type: str
-    allocation_pct: float; max_lots: int; risk_per_lot: float
-    score: RegimeScore
-    rationale: List[str]; warnings: List[str]
-    suggested_structure: str
+    expiry_type: str; expiry_date: date; dte: int; regime_name: str; strategy_type: str; allocation_pct: float; max_lots: int; risk_per_lot: float; score: RegimeScore; rationale: List[str]; warnings: List[str]; suggested_structure: str
 
 # ==========================================
 # SESSION MANAGER
@@ -377,11 +284,7 @@ class SessionManager:
     def _refresh_token(self):
         url = "https://api.upstox.com/v2/login/authorization/token"
         headers = {'accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded'}
-        data = {
-            'client_id': self.client_id, 'client_secret': self.client_secret,
-            'redirect_uri': self.redirect_uri, 'grant_type': 'refresh_token',
-            'refresh_token': ProductionConfig.UPSTOX_REFRESH_TOKEN
-        }
+        data = {'client_id': self.client_id, 'client_secret': self.client_secret, 'redirect_uri': self.redirect_uri, 'grant_type': 'refresh_token', 'refresh_token': ProductionConfig.UPSTOX_REFRESH_TOKEN}
         try:
             response = requests.post(url, headers=headers, data=data)
             if response.status_code == 200:
@@ -401,7 +304,7 @@ class SessionManager:
             return False
 
 # ==========================================
-# UPSTOX API CLIENT (FIXED)
+# UPSTOX API CLIENT (ALL 5 FIXES APPLIED)
 # ==========================================
 class UpstoxAPIClient:
     def __init__(self):
@@ -409,11 +312,7 @@ class UpstoxAPIClient:
         self.configuration.access_token = ProductionConfig.UPSTOX_ACCESS_TOKEN
         self.api_client = upstox_client.ApiClient(self.configuration)
         self.session = requests.Session()
-        self.session.headers.update({
-            "Authorization": f"Bearer {ProductionConfig.UPSTOX_ACCESS_TOKEN}",
-            "Accept": "application/json",
-            "Api-Version": "2.0"
-        })
+        self.session.headers.update({"Authorization": f"Bearer {ProductionConfig.UPSTOX_ACCESS_TOKEN}", "Accept": "application/json", "Api-Version": "2.0"})
         self.market_streamer = None
         self.latest_prices = {}
         self.streamer_lock = threading.Lock()
@@ -433,18 +332,13 @@ class UpstoxAPIClient:
         except:
             return True
     
+    # FIX #1: Changed 'M' to 'D'
     def check_margin_requirement(self, legs: List[Dict]) -> float:
         try:
             instruments = []
             for leg in legs:
-                instruments.append({
-                    "instrument_key": leg['key'], "quantity": int(leg['qty']),
-                    "transaction_type": leg['side'], "product": "M" 
-                })
-            response = self.session.post(
-                f"{ProductionConfig.API_V2}/charges/margin",
-                json={"instruments": instruments}, timeout=5
-            )
+                instruments.append({"instrument_key": leg['key'], "quantity": int(leg['qty']), "transaction_type": leg['side'], "product": "D"})
+            response = self.session.post(f"{ProductionConfig.API_V2}/charges/margin", json={"instruments": instruments}, timeout=5)
             if response.status_code == 200:
                 return float(response.json().get('data', {}).get('required_margin', 0.0))
             return float('inf')
@@ -463,21 +357,16 @@ class UpstoxAPIClient:
             logger.error(f"GTT Check Failed: {e}")
             return None
 
-    def place_gtt_order(self, instrument_key: str, qty: int, side: str, 
-                        stop_loss_price: float, target_price: float) -> Optional[str]:
+    # FIX #4: Corrected GTT trigger logic
+    def place_gtt_order(self, instrument_key: str, qty: int, side: str, stop_loss_price: float, target_price: float) -> Optional[str]:
         try:
             api_instance = upstox_client.OrderApiV3(self.api_client)
-            rules = [
-                upstox_client.GttRule(strategy="STOPLOSS", trigger_type="IMMEDIATE", trigger_price=float(stop_loss_price)),
-                upstox_client.GttRule(strategy="TARGET", trigger_type="IMMEDIATE", trigger_price=float(target_price))
-            ]
-            body = upstox_client.GttPlaceOrderRequest(
-                type="MULTIPLE", quantity=int(qty), product="D", 
-                rules=rules, instrument_token=instrument_key, transaction_type=side
-            )
+            sl_trigger = "ABOVE" if side == "BUY" else "BELOW"
+            target_trigger = "BELOW" if side == "BUY" else "ABOVE"
+            rules = [upstox_client.GttRule(strategy="STOPLOSS", trigger_type=sl_trigger, trigger_price=float(stop_loss_price)), upstox_client.GttRule(strategy="TARGET", trigger_type=target_trigger, trigger_price=float(target_price))]
+            body = upstox_client.GttPlaceOrderRequest(type="MULTIPLE", quantity=int(qty), product="D", rules=rules, instrument_token=instrument_key, transaction_type=side)
             response = api_instance.place_gtt_order(body)
-            logger.info(f"GTT PLACED: {side} {qty}x {instrument_key}")
-            
+            logger.info(f"GTT PLACED: {side} {qty}x {instrument_key} | SL={stop_loss_price} Target={target_price}")
             if response.data and hasattr(response.data, 'gtt_order_ids') and response.data.gtt_order_ids:
                 return response.data.gtt_order_ids[0]
             return getattr(response.data, 'gtt_order_id', None)
@@ -504,68 +393,54 @@ class UpstoxAPIClient:
         return pd.DataFrame()
     
     def check_socket_health(self):
-        """v42.5: Heartbeat Check"""
         with self.streamer_lock:
             last_time = self.latest_prices.get('_last_update_ts', 0)
             if time.time() - last_time > 10:
                 return False
             return True
 
+    # FIX #2: Dynamic subscription method
+    def subscribe_instruments(self, keys: List[str], mode: str = "option_greeks"):
+        if self.market_streamer:
+            try:
+                self.market_streamer.subscribe(keys, mode)
+                logger.info(f"✅ Subscribed to {len(keys)} new instruments in {mode} mode")
+            except Exception as e:
+                logger.error(f"Subscription failed: {e}")
+
     def start_market_stream(self, instruments: List[str]):
-        """CRITICAL FIX: Changed to 'full' mode - CORRECT Upstox V3 mode"""
         if self.market_streamer is not None:
             return
-
         try:
             def on_message(message):
                 with self.streamer_lock:
                     self.latest_prices['_last_update_ts'] = time.time()
-                    
-                    # FIX: Handle 'feeds' as Dictionary (key -> feed_data)
                     feeds = message.get('feeds', {})
                     if not isinstance(feeds, dict):
                         return
-                    
                     for key, feed_data in feeds.items():
                         if not isinstance(feed_data, dict):
                             continue
-                        
-                        # Extract LTP - Critical for Risk Manager
+                        data_wrapper = feed_data.get('oc', feed_data.get('fullFeed', feed_data))
                         ltp = 0
-                        if 'ltpc' in feed_data:
-                            ltp = feed_data['ltpc'].get('ltp', 0)
-                        elif 'fullFeed' in feed_data and isinstance(feed_data['fullFeed'], dict):
-                            if 'ltpc' in feed_data['fullFeed']:
-                                ltp = feed_data['fullFeed']['ltpc'].get('ltp', 0)
-                        
+                        if 'ltpc' in data_wrapper:
+                            ltp = data_wrapper['ltpc'].get('ltp', 0)
                         if ltp > 0:
                             self.latest_prices[key] = ltp
-                        
-                        # Extract Greeks
-                        greeks = None
-                        if 'optionGreeks' in feed_data:
-                            greeks = feed_data['optionGreeks']
-                        elif 'fullFeed' in feed_data and isinstance(feed_data['fullFeed'], dict):
-                            if 'optionGreeks' in feed_data['fullFeed']:
-                                greeks = feed_data['fullFeed']['optionGreeks']
-                        
+                        greeks = data_wrapper.get('optionGreeks')
                         if greeks and isinstance(greeks, dict):
                             self.latest_prices[f"{key}_greeks"] = greeks
             
             def on_open(): 
-                logger.info("✅ WebSocket Connected (full mode - LTP + Greeks)")
-            
+                logger.info("✅ WebSocket Connected")
             def on_error(error):
                 logger.error(f"WebSocket Error: {error}")
             
-            # FIX: Use 'full' mode - this is the correct Upstox V3 mode
-            self.market_streamer = upstox_client.MarketDataStreamerV3(
-                self.api_client, instruments, mode="full"
-            )
+            self.market_streamer = upstox_client.MarketDataStreamerV3(self.api_client, instruments, mode="ltpc")
             self.market_streamer.on("message", on_message)
             self.market_streamer.on("open", on_open)
             self.market_streamer.on("error", on_error)
-            
+            self.market_streamer.auto_reconnect(True, 10, 5)
             threading.Thread(target=self.market_streamer.connect, daemon=True).start()
             time.sleep(2)
             logger.info("WebSocket initialization complete")
@@ -579,10 +454,7 @@ class UpstoxAPIClient:
     
     def get_expiries(self) -> Tuple[Optional[date], Optional[date], Optional[date], int]:
         try:
-            response = self.session.get(
-                f"{ProductionConfig.API_V2}/option/contract",
-                params={"instrument_key": ProductionConfig.NIFTY_KEY}, timeout=10
-            )
+            response = self.session.get(f"{ProductionConfig.API_V2}/option/contract", params={"instrument_key": ProductionConfig.NIFTY_KEY}, timeout=10)
             if response.status_code == 200:
                 data = response.json().get('data', [])
                 if not data:
@@ -607,63 +479,41 @@ class UpstoxAPIClient:
     def get_option_chain(self, expiry_date: date) -> pd.DataFrame:
         try:
             expiry_str = expiry_date.strftime("%Y-%m-%d")
-            response = self.session.get(
-                f"{ProductionConfig.API_V2}/option/chain",
-                params={"instrument_key": ProductionConfig.NIFTY_KEY, "expiry_date": expiry_str},
-                timeout=10
-            )
+            response = self.session.get(f"{ProductionConfig.API_V2}/option/chain", params={"instrument_key": ProductionConfig.NIFTY_KEY, "expiry_date": expiry_str}, timeout=10)
             if response.status_code == 200:
                 data = response.json().get('data', [])
-                return pd.DataFrame([{
-                    'strike': x['strike_price'],
-                    'ce_iv': x['call_options']['option_greeks']['iv'],
-                    'pe_iv': x['put_options']['option_greeks']['iv'],
-                    'ce_delta': x['call_options']['option_greeks']['delta'],
-                    'pe_delta': x['put_options']['option_greeks']['delta'],
-                    'ce_gamma': x['call_options']['option_greeks']['gamma'],
-                    'pe_gamma': x['put_options']['option_greeks']['gamma'],
-                    'ce_oi': x['call_options']['market_data']['oi'],
-                    'pe_oi': x['put_options']['market_data']['oi'],
-                    'ce_ltp': x['call_options']['market_data']['ltp'],
-                    'pe_ltp': x['put_options']['market_data']['ltp'],
-                    'ce_bid': x['call_options']['market_data'].get('bid_price', 0),
-                    'ce_ask': x['call_options']['market_data'].get('ask_price', 0),
-                    'pe_bid': x['put_options']['market_data'].get('bid_price', 0),
-                    'pe_ask': x['put_options']['market_data'].get('ask_price', 0),
-                    'ce_key': x['call_options']['instrument_key'],
-                    'pe_key': x['put_options']['instrument_key']
-                } for x in data])
+                return pd.DataFrame([{'strike': x['strike_price'], 'ce_iv': x['call_options']['option_greeks']['iv'], 'pe_iv': x['put_options']['option_greeks']['iv'], 'ce_delta': x['call_options']['option_greeks']['delta'], 'pe_delta': x['put_options']['option_greeks']['delta'], 'ce_gamma': x['call_options']['option_greeks']['gamma'], 'pe_gamma': x['put_options']['option_greeks']['gamma'], 'ce_oi': x['call_options']['market_data']['oi'], 'pe_oi': x['put_options']['market_data']['oi'], 'ce_ltp': x['call_options']['market_data']['ltp'], 'pe_ltp': x['put_options']['market_data']['ltp'], 'ce_bid': x['call_options']['market_data'].get('bid_price', 0), 'ce_ask': x['call_options']['market_data'].get('ask_price', 0), 'pe_bid': x['put_options']['market_data'].get('bid_price', 0), 'pe_ask': x['put_options']['market_data'].get('ask_price', 0), 'ce_key': x['call_options']['instrument_key'], 'pe_key': x['put_options']['instrument_key']} for x in data])
         except:
             pass
         return pd.DataFrame()
     
-    def place_order(self, instrument_key: str, qty: int, side: str, 
-                   order_type: str = "LIMIT", price: float = 0.0) -> Optional[str]:
+    # FIX #1: Changed 'M' to 'D'
+    def place_order(self, instrument_key: str, qty: int, side: str, order_type: str = "LIMIT", price: float = 0.0) -> Optional[str]:
         try:
             api_instance = upstox_client.OrderApiV3(self.api_client)
-            body = upstox_client.PlaceOrderV3Request(
-                quantity=int(qty), product="M", validity="DAY", price=float(price),
-                tag="VG42", instrument_token=instrument_key, order_type=order_type,
-                transaction_type=side, disclosed_quantity=0, trigger_price=0.0, is_amo=False
-            )
+            body = upstox_client.PlaceOrderV3Request(quantity=int(qty), product="D", validity="DAY", price=float(price), tag="VG42", instrument_token=instrument_key, order_type=order_type, transaction_type=side, disclosed_quantity=0, trigger_price=0.0, is_amo=False)
             api_response = api_instance.place_order(body)
-            order_id = api_response.order_id
+            if hasattr(api_response, 'data') and hasattr(api_response.data, 'order_id'):
+                order_id = api_response.data.order_id
+            else:
+                order_id = getattr(api_response, 'order_id', None)
             logger.info(f"ORDER PLACED: {side} {qty}x {instrument_key} @ {price} | ID={order_id}")
             return order_id
         except Exception as e:
             logger.error(f"Order placement failed: {e}")
             return None
     
+    # FIX #3: Corrected order status parsing
     def get_order_status(self, order_id: str) -> Optional[Dict]:
         try:
             api_instance = upstox_client.OrderApi(self.api_client)
             response = api_instance.get_order_details(order_id=order_id)
-            return {
-                'status': response.status,
-                'avg_price': float(response.average_price) if response.average_price else 0,
-                'filled_qty': int(response.filled_quantity) if response.filled_quantity else 0,
-            }
-        except:
+            if not hasattr(response, 'data') or not response.data:
+                return None
+            order_data = response.data[0] if isinstance(response.data, list) else response.data
+            return {'status': order_data.status, 'avg_price': float(order_data.average_price) if order_data.average_price else 0.0, 'filled_qty': int(order_data.filled_quantity) if order_data.filled_quantity else 0}
+        except Exception as e:
+            logger.error(f"Order status check failed: {e}")
             return None
     
     def cancel_order(self, order_id: str) -> bool:
@@ -683,12 +533,19 @@ class UpstoxAPIClient:
         except:
             return []
     
+    # FIX #5: Corrected funds access
     def get_funds(self) -> float:
         try:
             api_instance = upstox_client.UserApi(self.api_client)
             response = api_instance.get_user_fund_margin(segment="SEC")
-            return float(response.data.equity.available_margin)
-        except:
+            data = response.data
+            if hasattr(data, 'equity'):
+                return float(data.equity.available_margin)
+            elif isinstance(data, dict) and 'equity' in data:
+                return float(data['equity']['available_margin'])
+            return 0.0
+        except Exception as e:
+            logger.error(f"Funds fetch failed: {e}")
             return 0.0
 
 api_client = UpstoxAPIClient()
@@ -736,18 +593,7 @@ class ParticipantDataFetcher:
         for p in ["FII", "DII", "Client", "Pro"]:
             try:
                 row = df[df['Client Type'].astype(str).str.contains(p, case=False, na=False)].iloc[0]
-                data[p] = ParticipantData(
-                    fut_long=float(row['Future Index Long']),
-                    fut_short=float(row['Future Index Short']),
-                    fut_net=float(row['Future Index Long']) - float(row['Future Index Short']),
-                    call_long=float(row['Option Index Call Long']),
-                    call_short=float(row['Option Index Call Short']),
-                    call_net=float(row['Option Index Call Long']) - float(row['Option Index Call Short']),
-                    put_long=float(row['Option Index Put Long']),
-                    put_short=float(row['Option Index Put Short']),
-                    put_net=float(row['Option Index Put Long']) - float(row['Option Index Put Short']),
-                    stock_net=float(row['Future Stock Long']) - float(row['Future Stock Short'])
-                )
+                data[p] = ParticipantData(fut_long=float(row['Future Index Long']), fut_short=float(row['Future Index Short']), fut_net=float(row['Future Index Long']) - float(row['Future Index Short']), call_long=float(row['Option Index Call Long']), call_short=float(row['Option Index Call Short']), call_net=float(row['Option Index Call Long']) - float(row['Option Index Call Short']), put_long=float(row['Option Index Put Long']), put_short=float(row['Option Index Put Short']), put_net=float(row['Option Index Put Long']) - float(row['Option Index Put Short']), stock_net=float(row['Future Stock Long']) - float(row['Future Stock Short']))
             except:
                 data[p] = None
         return data
@@ -777,12 +623,7 @@ class AnalyticsEngine:
         dte_w = (weekly - today).days
         dte_m = (monthly - today).days
         dte_nw = (next_weekly - today).days
-        return TimeMetrics(
-            today, weekly, monthly, next_weekly, dte_w, dte_m,
-            dte_w <= ProductionConfig.GAMMA_DANGER_DTE,
-            dte_m <= ProductionConfig.GAMMA_DANGER_DTE,
-            dte_nw
-        )
+        return TimeMetrics(today, weekly, monthly, next_weekly, dte_w, dte_m, dte_w <= ProductionConfig.GAMMA_DANGER_DTE, dte_m <= ProductionConfig.GAMMA_DANGER_DTE, dte_nw)
     
     def get_vol_metrics(self, nifty_hist, vix_hist, spot_live, vix_live) -> VolMetrics:
         is_fallback = False
@@ -790,12 +631,10 @@ class AnalyticsEngine:
         vix = vix_live if vix_live > 0 else (vix_hist.iloc[-1]['close'] if not vix_hist.empty else 0)
         if spot_live <= 0 or vix_live <= 0:
             is_fallback = True
-        
         returns = np.log(nifty_hist['close'] / nifty_hist['close'].shift(1)).dropna()
         rv7 = returns.rolling(7).std().iloc[-1] * np.sqrt(252) * 100
         rv28 = returns.rolling(28).std().iloc[-1] * np.sqrt(252) * 100
         rv90 = returns.rolling(90).std().iloc[-1] * np.sqrt(252) * 100
-        
         def fit_garch(horizon):
             try:
                 if len(returns) < 100:
@@ -806,47 +645,29 @@ class AnalyticsEngine:
                 return np.sqrt(forecast.variance.values[-1, -1]) * np.sqrt(252)
             except:
                 return 0
-        
         garch7 = fit_garch(7) or rv7
         garch28 = fit_garch(28) or rv28
-        
         const = 1.0 / (4.0 * np.log(2.0))
         park7 = np.sqrt((np.log(nifty_hist['high'] / nifty_hist['low']) ** 2).tail(7).mean() * const) * np.sqrt(252) * 100
         park28 = np.sqrt((np.log(nifty_hist['high'] / nifty_hist['low']) ** 2).tail(28).mean() * const) * np.sqrt(252) * 100
-        
         vix_returns = np.log(vix_hist['close'] / vix_hist['close'].shift(1)).dropna()
         vov = vix_returns.rolling(30).std().iloc[-1] * np.sqrt(252) * 100
         vov_rolling = vix_returns.rolling(30).std() * np.sqrt(252) * 100
         vov_mean = vov_rolling.rolling(60).mean().iloc[-1]
         vov_std = vov_rolling.rolling(60).std().iloc[-1]
         vov_zscore = (vov - vov_mean) / vov_std if vov_std > 0 else 0
-        
         def calc_ivp(window):
             if len(vix_hist) < window:
                 return 0.0
             history = vix_hist['close'].tail(window)
             return (history < vix).mean() * 100
-        
         ivp_30d, ivp_90d, ivp_1yr = calc_ivp(30), calc_ivp(90), calc_ivp(252)
-        
         ma20 = nifty_hist['close'].rolling(20).mean().iloc[-1]
-        true_range = pd.concat([
-            nifty_hist['high']-nifty_hist['low'],
-            (nifty_hist['high']-nifty_hist['close'].shift(1)).abs(),
-            (nifty_hist['low']-nifty_hist['close'].shift(1)).abs()
-        ], axis=1).max(axis=1)
+        true_range = pd.concat([nifty_hist['high']-nifty_hist['low'], (nifty_hist['high']-nifty_hist['close'].shift(1)).abs(), (nifty_hist['low']-nifty_hist['close'].shift(1)).abs()], axis=1).max(axis=1)
         atr14 = true_range.rolling(14).mean().iloc[-1]
         trend_strength = abs(spot - ma20) / atr14 if atr14 > 0 else 0
-        
-        vol_regime = "EXPLODING" if vov_zscore > ProductionConfig.VOV_CRASH_ZSCORE else \
-                     "RICH" if ivp_1yr > ProductionConfig.HIGH_VOL_IVP else \
-                     "CHEAP" if ivp_1yr < ProductionConfig.LOW_VOL_IVP else "FAIR"
-        
-        return VolMetrics(
-            spot, vix, rv7, rv28, rv90, garch7, garch28, park7, park28,
-            vov, vov_zscore, ivp_30d, ivp_90d, ivp_1yr, ma20, atr14,
-            trend_strength, vol_regime, is_fallback
-        )
+        vol_regime = "EXPLODING" if vov_zscore > ProductionConfig.VOV_CRASH_ZSCORE else "RICH" if ivp_1yr > ProductionConfig.HIGH_VOL_IVP else "CHEAP" if ivp_1yr < ProductionConfig.LOW_VOL_IVP else "FAIR"
+        return VolMetrics(spot, vix, rv7, rv28, rv90, garch7, garch28, park7, park28, vov, vov_zscore, ivp_30d, ivp_90d, ivp_1yr, ma20, atr14, trend_strength, vol_regime, is_fallback)
     
     def get_struct_metrics(self, chain, spot, lot_size) -> StructMetrics:
         if chain.empty or spot == 0:
@@ -857,18 +678,15 @@ class AnalyticsEngine:
         gex_ratio = abs(net_gex) / total_oi_value if total_oi_value > 0 else 0
         gex_regime = "STICKY" if gex_ratio > ProductionConfig.GEX_STICKY_RATIO else "SLIPPERY" if gex_ratio < ProductionConfig.GEX_STICKY_RATIO * 0.5 else "NEUTRAL"
         pcr = chain['pe_oi'].sum() / chain['ce_oi'].sum() if chain['ce_oi'].sum() > 0 else 1.0
-        
         strikes = chain['strike'].values
         losses = [np.sum(np.maximum(0, s - strikes) * chain['ce_oi'].values) + np.sum(np.maximum(0, strikes - s) * chain['pe_oi'].values) for s in strikes]
         max_pain = strikes[np.argmin(losses)] if losses else 0
-        
         try:
             ce_25d_idx = (chain['ce_delta'].abs() - 0.25).abs().argsort()[:1]
             pe_25d_idx = (chain['pe_delta'].abs() - 0.25).abs().argsort()[:1]
             skew_25d = chain.iloc[pe_25d_idx]['pe_iv'].values[0] - chain.iloc[ce_25d_idx]['ce_iv'].values[0]
         except:
             skew_25d = 0
-        
         oi_regime = "BULLISH" if pcr > 1.2 else "BEARISH" if pcr < 0.8 else "NEUTRAL"
         return StructMetrics(net_gex, gex_ratio, total_oi_value, gex_regime, pcr, max_pain, skew_25d, oi_regime, lot_size)
     
@@ -879,10 +697,8 @@ class AnalyticsEngine:
             atm_idx = (chain['strike'] - spot).abs().argsort()[:1]
             row = chain.iloc[atm_idx].iloc[0]
             return (row['ce_iv'] + row['pe_iv']) / 2
-        
         iv_weekly = get_atm_iv(weekly_chain)
         iv_monthly = get_atm_iv(monthly_chain)
-        
         vrp_rv_weekly = iv_weekly - vol.rv7
         vrp_garch_weekly = iv_weekly - vol.garch7
         vrp_park_weekly = iv_weekly - vol.park7
@@ -891,17 +707,8 @@ class AnalyticsEngine:
         vrp_park_monthly = iv_monthly - vol.park28
         term_spread = iv_monthly - iv_weekly
         term_regime = "BACKWARDATION" if term_spread < -1.0 else "CONTANGO" if term_spread > 1.0 else "FLAT"
-        primary_edge = "LONG_VOL" if vol.ivp_1yr < ProductionConfig.LOW_VOL_IVP else \
-                      "SHORT_GAMMA" if vrp_park_weekly > 4.0 and vol.ivp_1yr > 50 else \
-                      "SHORT_VEGA" if vrp_park_monthly > 3.0 and vol.ivp_1yr > 50 else \
-                      "CALENDAR_SPREAD" if term_regime == "BACKWARDATION" and term_spread < -2.0 else \
-                      "MEAN_REVERSION" if vol.ivp_1yr > ProductionConfig.HIGH_VOL_IVP else "NONE"
-        
-        return EdgeMetrics(
-            iv_weekly, vrp_rv_weekly, vrp_garch_weekly, vrp_park_weekly,
-            iv_monthly, vrp_rv_monthly, vrp_garch_monthly, vrp_park_monthly,
-            term_spread, term_regime, primary_edge
-        )
+        primary_edge = "LONG_VOL" if vol.ivp_1yr < ProductionConfig.LOW_VOL_IVP else "SHORT_GAMMA" if vrp_park_weekly > 4.0 and vol.ivp_1yr > 50 else "SHORT_VEGA" if vrp_park_monthly > 3.0 and vol.ivp_1yr > 50 else "CALENDAR_SPREAD" if term_regime == "BACKWARDATION" and term_spread < -2.0 else "MEAN_REVERSION" if vol.ivp_1yr > ProductionConfig.HIGH_VOL_IVP else "NONE"
+        return EdgeMetrics(iv_weekly, vrp_rv_weekly, vrp_garch_weekly, vrp_park_weekly, iv_monthly, vrp_rv_monthly, vrp_garch_monthly, vrp_park_monthly, term_spread, term_regime, primary_edge)
     
     def get_external_metrics(self, nifty_hist, participant_data, participant_yest, fii_net_change, data_date) -> ExternalMetrics:
         fast_vol = False
@@ -909,7 +716,6 @@ class AnalyticsEngine:
             last_bar = nifty_hist.iloc[-1]
             daily_range_pct = ((last_bar['high'] - last_bar['low']) / last_bar['open']) * 100
             fast_vol = daily_range_pct > 1.8
-        
         flow_regime = "NEUTRAL"
         if participant_data and participant_data.get('FII'):
             fii_net = participant_data['FII'].fut_net
@@ -919,22 +725,13 @@ class AnalyticsEngine:
                 flow_regime = "STRONG_SHORT"
             elif abs(fii_net) > ProductionConfig.FII_MODERATE:
                 flow_regime = "MODERATE_LONG" if fii_net > 0 else "MODERATE_SHORT"
-        
-        return ExternalMetrics(
-            fii=participant_data.get('FII') if participant_data else None,
-            dii=participant_data.get('DII') if participant_data else None,
-            pro=participant_data.get('Pro') if participant_data else None,
-            client=participant_data.get('Client') if participant_data else None,
-            fii_net_change=fii_net_change, flow_regime=flow_regime, fast_vol=fast_vol, data_date=data_date
-        )
+        return ExternalMetrics(fii=participant_data.get('FII') if participant_data else None, dii=participant_data.get('DII') if participant_data else None, pro=participant_data.get('Pro') if participant_data else None, client=participant_data.get('Client') if participant_data else None, fii_net_change=fii_net_change, flow_regime=flow_regime, fast_vol=fast_vol, data_date=data_date)
 
 # ==========================================
 # REGIME ENGINE
 # ==========================================
 class RegimeEngine:
-    def calculate_scores(self, vol: VolMetrics, struct: StructMetrics, edge: EdgeMetrics,
-                        external: ExternalMetrics, time: TimeMetrics, expiry_type: str) -> RegimeScore:
-        
+    def calculate_scores(self, vol: VolMetrics, struct: StructMetrics, edge: EdgeMetrics, external: ExternalMetrics, time: TimeMetrics, expiry_type: str) -> RegimeScore:
         if expiry_type == "WEEKLY":
             garch_val = edge.vrp_garch_weekly
             park_val = edge.vrp_park_weekly
@@ -943,10 +740,8 @@ class RegimeEngine:
             garch_val = edge.vrp_garch_monthly
             park_val = edge.vrp_park_monthly
             rv_val = edge.vrp_rv_monthly
-        
         weighted_vrp = (garch_val * 0.70) + (park_val * 0.15) + (rv_val * 0.15)
         edge_score = 5.0
-        
         if weighted_vrp > 4.0:
             edge_score += 3.0
         elif weighted_vrp > 2.0:
@@ -955,13 +750,11 @@ class RegimeEngine:
             edge_score += 1.0
         elif weighted_vrp < 0:
             edge_score -= 3.0
-        
         if edge.term_regime == "BACKWARDATION" and edge.term_spread < -2.0:
             edge_score += 1.0
         elif edge.term_regime == "CONTANGO":
             edge_score += 0.5
         edge_score = max(0, min(10, edge_score))
-        
         vol_score = 5.0
         if vol.vov_zscore > ProductionConfig.VOV_CRASH_ZSCORE:
             vol_score = 0.0
@@ -976,7 +769,6 @@ class RegimeEngine:
         else:
             vol_score += 1.0
         vol_score = max(0, min(10, vol_score))
-        
         struct_score = 5.0
         if struct.gex_regime == "STICKY":
             struct_score += 2.5 if expiry_type == "WEEKLY" and time.dte_weekly <= 1 else 1.0
@@ -989,7 +781,6 @@ class RegimeEngine:
         if abs(struct.skew_25d) > 3.0:
             struct_score -= 0.5
         struct_score = max(0, min(10, struct_score))
-        
         risk_score = 10.0
         if external.fast_vol:
             risk_score -= 2.0
@@ -1002,25 +793,17 @@ class RegimeEngine:
         elif expiry_type == "MONTHLY" and time.is_gamma_month:
             risk_score -= 2.5
         risk_score = max(0, min(10, risk_score))
-        
-        composite = (vol_score * ProductionConfig.WEIGHT_VOL +
-                     struct_score * ProductionConfig.WEIGHT_STRUCT +
-                     edge_score * ProductionConfig.WEIGHT_EDGE +
-                     risk_score * ProductionConfig.WEIGHT_RISK)
+        composite = (vol_score * ProductionConfig.WEIGHT_VOL + struct_score * ProductionConfig.WEIGHT_STRUCT + edge_score * ProductionConfig.WEIGHT_EDGE + risk_score * ProductionConfig.WEIGHT_RISK)
         confidence = "VERY_HIGH" if composite >= 8.0 else "HIGH" if composite >= 6.5 else "MODERATE" if composite >= 4.0 else "LOW"
         return RegimeScore(vol_score, struct_score, edge_score, risk_score, composite, confidence)
     
-    def generate_mandate(self, score: RegimeScore, vol: VolMetrics, struct: StructMetrics,
-                        edge: EdgeMetrics, external: ExternalMetrics, time: TimeMetrics,
-                        expiry_type: str, expiry_date: date, dte: int) -> TradingMandate:
+    def generate_mandate(self, score: RegimeScore, vol: VolMetrics, struct: StructMetrics, edge: EdgeMetrics, external: ExternalMetrics, time: TimeMetrics, expiry_type: str, expiry_date: date, dte: int) -> TradingMandate:
         rationale = []
         warnings = []
-        
         if expiry_type == "WEEKLY":
             w_vrp = (edge.vrp_garch_weekly * 0.7) + (edge.vrp_park_weekly * 0.15) + (edge.vrp_rv_weekly * 0.15)
         else:
             w_vrp = (edge.vrp_garch_monthly * 0.7) + (edge.vrp_park_monthly * 0.15) + (edge.vrp_rv_monthly * 0.15)
-        
         if score.composite >= 7.5:
             regime_name = "AGGRESSIVE_SHORT"; allocation = 60.0; strategy = "AGGRESSIVE_SHORT"; suggested = "STRANGLE"
             rationale.append(f"High Confidence ({score.confidence}): Weighted VRP {w_vrp:.2f} is strong")
@@ -1033,7 +816,6 @@ class RegimeEngine:
         else:
             regime_name = "CASH"; allocation = 0.0; strategy = "CASH"; suggested = "NONE"
             rationale.append("Regime Unfavorable: Cash is a position")
-        
         if vol.vov_zscore > ProductionConfig.VOV_WARNING_ZSCORE:
             warnings.append(f"⚠️ HIGH VOL-OF-VOL ({vol.vov_zscore:.2f}σ)")
         if external.flow_regime == "STRONG_SHORT" and external.fii:
@@ -1042,15 +824,10 @@ class RegimeEngine:
         if dte <= ProductionConfig.GAMMA_DANGER_DTE and expiry_type == "WEEKLY":
             warnings.append(f"⚠️ GAMMA RISK")
             allocation *= 0.5
-        
         deployable = ProductionConfig.BASE_CAPITAL * (allocation / 100.0)
         risk_per_lot = ProductionConfig.MARGIN_SELL_BASE if strategy != "DEFENSIVE" else ProductionConfig.MARGIN_SELL_BASE * 0.6
         max_lots = int(deployable / risk_per_lot) if risk_per_lot > 0 else 0
-        
-        return TradingMandate(
-            expiry_type, expiry_date, dte, regime_name, strategy,
-            allocation, max_lots, risk_per_lot, score, rationale, warnings, suggested
-        )
+        return TradingMandate(expiry_type, expiry_date, dte, regime_name, strategy, allocation, max_lots, risk_per_lot, score, rationale, warnings, suggested)
 
 # ==========================================
 # STRATEGY FACTORY
@@ -1064,27 +841,17 @@ class StrategyFactory:
         col_delta = f"{type_.lower()}_delta"
         df['delta_diff'] = (df[col_delta].abs() - target).abs()
         candidates = df.sort_values('delta_diff')
-        
         for _, row in candidates.iterrows():
             bid = row[f'{type_.lower()}_bid']
             ask = row[f'{type_.lower()}_ask']
             ltp = row[f'{type_.lower()}_ltp']
             if ltp <= 0 or ask <= 0:
                 continue
-            
             spread = (ask - bid) / ltp
             if spread > ProductionConfig.MAX_BID_ASK_SPREAD:
                 logger.warning(f"Skipping {type_} {row['strike']}: Spread {spread*100:.1f}%")
                 continue
-            
-            return {
-                'key': row[f'{type_.lower()}_key'],
-                'strike': row['strike'],
-                'ltp': ltp,
-                'delta': row[col_delta],
-                'type': type_
-            }
-        
+            return {'key': row[f'{type_.lower()}_key'], 'strike': row['strike'], 'ltp': ltp, 'delta': row[col_delta], 'type': type_}
         logger.critical(f"NO LIQUID STRIKES FOUND for {type_}. Aborting.")
         telegram.send(f"⚠️ LIQUIDITY DRY: No {type_} strikes within limit.", "CRITICAL")
         return None
@@ -1092,38 +859,22 @@ class StrategyFactory:
     def generate(self, mandate: TradingMandate, chain: pd.DataFrame, lot_size: int) -> List[Dict]:
         if mandate.max_lots == 0 or chain.empty:
             return []
-        
         qty = mandate.max_lots * lot_size
         legs = []
-        
         def get_safe_leg(type_, delta, side, role):
             l = self.find_leg(chain, type_, delta)
             if l:
                 return {**l, 'side': side, 'role': role, 'qty': qty}
             return None
-
         if mandate.suggested_structure == "IRON_CONDOR":
-            legs = [
-                get_safe_leg('CE', 0.05, 'BUY', 'HEDGE'),
-                get_safe_leg('PE', 0.05, 'BUY', 'HEDGE'),
-                get_safe_leg('CE', 0.20, 'SELL', 'CORE'),
-                get_safe_leg('PE', 0.20, 'SELL', 'CORE')
-            ]
+            legs = [get_safe_leg('CE', 0.05, 'BUY', 'HEDGE'), get_safe_leg('PE', 0.05, 'BUY', 'HEDGE'), get_safe_leg('CE', 0.20, 'SELL', 'CORE'), get_safe_leg('PE', 0.20, 'SELL', 'CORE')]
         elif mandate.suggested_structure == "STRANGLE":
-            legs = [
-                get_safe_leg('CE', 0.25, 'SELL', 'CORE'),
-                get_safe_leg('PE', 0.25, 'SELL', 'CORE')
-            ]
+            legs = [get_safe_leg('CE', 0.25, 'SELL', 'CORE'), get_safe_leg('PE', 0.25, 'SELL', 'CORE')]
         elif mandate.suggested_structure == "CREDIT_SPREAD":
-            legs = [
-                get_safe_leg('PE', 0.10, 'BUY', 'HEDGE'),
-                get_safe_leg('PE', 0.25, 'SELL', 'CORE')
-            ]
-        
+            legs = [get_safe_leg('PE', 0.10, 'BUY', 'HEDGE'), get_safe_leg('PE', 0.25, 'SELL', 'CORE')]
         if any(l is None for l in legs):
             logger.error("Strategy Generation Failed: One or more legs illiquid.")
             return []
-            
         return legs
 
 # ==========================================
@@ -1139,17 +890,14 @@ class ExecutionEngine:
         expected_price = leg['ltp']
         logger.info(f"PLACING {leg['side']} {leg['strike']} @ {limit_price}")
         order_id = self.api.place_order(leg['key'], leg['qty'], leg['side'], "LIMIT", limit_price)
-        
         if not order_id:
             return None
-        
         start = time.time()
         while (time.time() - start) < ProductionConfig.ORDER_TIMEOUT:
             status = self.api.get_order_status(order_id)
             if not status:
                 time.sleep(0.5)
                 continue
-            
             if status['status'] == 'complete':
                 if status['filled_qty'] < leg['qty'] * ProductionConfig.PARTIAL_FILL_TOLERANCE:
                     logger.critical(f"PARTIAL FILL: {status['filled_qty']}/{leg['qty']}")
@@ -1165,7 +913,6 @@ class ExecutionEngine:
                 logger.error(f"ORDER DEAD: {status['status']}")
                 return None
             time.sleep(0.5)
-        
         logger.warning(f"TIMEOUT on {order_id}. Cancelling...")
         self.api.cancel_order(order_id)
         time.sleep(1)
@@ -1184,7 +931,6 @@ class ExecutionEngine:
             logger.critical(f"MARGIN ERROR: Need {required_margin}, Have {available_funds}")
             telegram.send(f"Margin Shortfall: Need {required_margin/100000:.2f}L", "ERROR")
             return []
-
         hedges = [l for l in legs if l['role'] == 'HEDGE']
         logger.info(f"Executing {len(hedges)} Hedges in Parallel...")
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(hedges) or 1) as executor:
@@ -1195,12 +941,10 @@ class ExecutionEngine:
                     hedge_failed = True
                 else:
                     executed.append(future.result())
-        
         if hedge_failed or len(executed) != len(hedges):
             logger.critical("Aborting before Cores. Flattening Hedges.")
             self.flatten(executed)
             return []
-
         cores = [l for l in legs if l['role'] == 'CORE']
         logger.info(f"Hedges Filled. Executing {len(cores)} Cores in Parallel...")
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(cores) or 1) as executor:
@@ -1211,11 +955,9 @@ class ExecutionEngine:
                     core_failed = True
                 else:
                     executed.append(future.result())
-
         if core_failed:
             self.flatten(executed)
             return []
-
         logger.info(f"STRATEGY DEPLOYED: {len(executed)} legs")
         telegram.send(f"Position opened: {len(executed)} legs (Parallel)", "TRADE")
         return executed
@@ -1243,7 +985,7 @@ class ExecutionEngine:
             self.api.place_order(leg['key'], leg['filled_qty'], side, "MARKET", 0)
 
 # ==========================================
-# RISK MANAGER (FIXED)
+# RISK MANAGER
 # ==========================================
 class RiskManager:
     def __init__(self, api: UpstoxAPIClient, legs, expiry_date):
@@ -1263,7 +1005,6 @@ class RiskManager:
                 if (self.expiry - date.today()).days <= ProductionConfig.EXIT_DTE:
                     self.flatten_all("DTE_EXIT")
                     return
-                
                 keys = [l['key'] for l in self.legs]
                 prices = self.api.get_live_prices(keys)
                 current_pnl = 0
@@ -1272,7 +1013,6 @@ class RiskManager:
                     leg['current_ltp'] = ltp
                     pnl = (leg['entry_price'] - ltp) * leg['filled_qty'] if leg['side'] == 'SELL' else (ltp - leg['entry_price']) * leg['filled_qty']
                     current_pnl += pnl
-                
                 if current_pnl < -(self.net_premium * ProductionConfig.STOP_LOSS_PCT):
                     self.flatten_all("STOP_LOSS_PREMIUM")
                     return
@@ -1282,7 +1022,6 @@ class RiskManager:
                 if self.net_premium > 0 and current_pnl >= (self.net_premium * ProductionConfig.TARGET_PROFIT_PCT):
                     self.flatten_all("TARGET_PROFIT")
                     return
-                
                 time.sleep(ProductionConfig.POLL_INTERVAL)
             except Exception as e:
                 logger.error(f"Risk manager error: {e}")
@@ -1301,18 +1040,12 @@ class RiskManager:
                 p_delta += (greeks.get('delta', 0) * leg['filled_qty'] * direction)
                 p_theta += (greeks.get('theta', 0) * leg['filled_qty'] * direction)
                 p_gamma += (greeks.get('gamma', 0) * leg['filled_qty'] * direction)
-        
-        db.set_state("live_portfolio", json.dumps({
-            "pnl": round(current_pnl, 2), "net_delta": round(p_delta, 2),
-            "net_theta": round(p_theta, 2), "net_gamma": round(p_gamma, 5),
-            "updated_at": datetime.now().strftime("%H:%M:%S")
-        }))
+        db.set_state("live_portfolio", json.dumps({"pnl": round(current_pnl, 2), "net_delta": round(p_delta, 2), "net_theta": round(p_theta, 2), "net_gamma": round(p_gamma, 5), "updated_at": datetime.now().strftime("%H:%M:%S")}))
     
     def flatten_all(self, reason="SIGNAL"):
         logger.critical(f"GLOBAL FLATTEN: {reason}")
         telegram.send(f"🚨 EMERGENCY FLATTEN: {reason}", "CRITICAL")
         pending_exits = [l for l in self.legs if l['filled_qty'] > 0]
-        
         for leg in pending_exits:
             retry_count = 0
             max_retries = 3
@@ -1345,7 +1078,7 @@ class RiskManager:
         self.running = False
 
 # ==========================================
-# TRADING ORCHESTRATOR
+# TRADING ORCHESTRATOR (FIX #2 APPLIED)
 # ==========================================
 class TradingOrchestrator:
     def __init__(self):
@@ -1359,49 +1092,33 @@ class TradingOrchestrator:
     def run_analysis(self) -> Optional[Dict]:
         logger.info("Starting market analysis...")
         self.api.start_market_stream([ProductionConfig.NIFTY_KEY, ProductionConfig.VIX_KEY])
-        
         participant_data, participant_yest, fii_net_change, data_date = ParticipantDataFetcher.fetch_participant_metrics()
         nifty_hist = self.api.get_history(ProductionConfig.NIFTY_KEY)
         vix_hist = self.api.get_history(ProductionConfig.VIX_KEY)
-        
         if nifty_hist.empty:
             logger.error("Failed to fetch historical data")
             return None
-        
         live_prices = self.api.get_live_prices([ProductionConfig.NIFTY_KEY, ProductionConfig.VIX_KEY])
         weekly, monthly, next_weekly, lot_size = self.api.get_expiries()
         if not weekly or not monthly:
             logger.error("Failed to fetch expiries")
             return None
-        
         weekly_chain = self.api.get_option_chain(weekly)
         monthly_chain = self.api.get_option_chain(monthly)
         if weekly_chain.empty and monthly_chain.empty:
             logger.error("Failed to fetch option chains")
             return None
-        
         time_metrics = self.analytics.get_time_metrics(weekly, monthly, next_weekly)
-        vol_metrics = self.analytics.get_vol_metrics(
-            nifty_hist, vix_hist, live_prices.get(ProductionConfig.NIFTY_KEY, 0), live_prices.get(ProductionConfig.VIX_KEY, 0)
-        )
-        
+        vol_metrics = self.analytics.get_vol_metrics(nifty_hist, vix_hist, live_prices.get(ProductionConfig.NIFTY_KEY, 0), live_prices.get(ProductionConfig.VIX_KEY, 0))
         struct_metrics_weekly = self.analytics.get_struct_metrics(weekly_chain, vol_metrics.spot, lot_size)
         struct_metrics_monthly = self.analytics.get_struct_metrics(monthly_chain, vol_metrics.spot, lot_size)
         edge_metrics = self.analytics.get_edge_metrics(weekly_chain, monthly_chain, vol_metrics.spot, vol_metrics)
         external_metrics = self.analytics.get_external_metrics(nifty_hist, participant_data, participant_yest, fii_net_change, data_date)
-        
         weekly_score = self.regime.calculate_scores(vol_metrics, struct_metrics_weekly, edge_metrics, external_metrics, time_metrics, "WEEKLY")
         monthly_score = self.regime.calculate_scores(vol_metrics, struct_metrics_monthly, edge_metrics, external_metrics, time_metrics, "MONTHLY")
-        
         weekly_mandate = self.regime.generate_mandate(weekly_score, vol_metrics, struct_metrics_weekly, edge_metrics, external_metrics, time_metrics, "WEEKLY", weekly, time_metrics.dte_weekly)
         monthly_mandate = self.regime.generate_mandate(monthly_score, vol_metrics, struct_metrics_monthly, edge_metrics, external_metrics, time_metrics, "MONTHLY", monthly, time_metrics.dte_monthly)
-        
-        self.last_analysis = {
-            'timestamp': datetime.now(),
-            'time_metrics': time_metrics, 'vol_metrics': vol_metrics,
-            'weekly_mandate': weekly_mandate, 'monthly_mandate': monthly_mandate,
-            'weekly_chain': weekly_chain, 'monthly_chain': monthly_chain, 'lot_size': lot_size
-        }
+        self.last_analysis = {'timestamp': datetime.now(), 'time_metrics': time_metrics, 'vol_metrics': vol_metrics, 'weekly_mandate': weekly_mandate, 'monthly_mandate': monthly_mandate, 'weekly_chain': weekly_chain, 'monthly_chain': monthly_chain, 'lot_size': lot_size}
         logger.info(f"Analysis complete - Weekly: {weekly_score.composite:.2f}, Monthly: {monthly_score.composite:.2f}")
         return self.last_analysis
     
@@ -1410,28 +1127,29 @@ class TradingOrchestrator:
         monthly_mandate = analysis['monthly_mandate']
         mandate = weekly_mandate if weekly_mandate.score.composite > monthly_mandate.score.composite else monthly_mandate
         chain = analysis['weekly_chain'] if mandate == weekly_mandate else analysis['monthly_chain']
-        
         if mandate.max_lots == 0:
             logger.info(f"Mandate is CASH - no trade")
             return None
         if circuit_breaker.is_active():
             logger.warning("Circuit breaker active - skipping trade")
             return None
-        
         legs = self.factory.generate(mandate, chain, analysis['lot_size'])
         if not legs:
             logger.error("Failed to generate legs")
             return None
-        
         filled_legs = self.executor.execute_strategy(legs)
         if not filled_legs:
             logger.error("Execution failed")
             return None
         
+        # FIX #2: Subscribe to new option legs for Risk Manager monitoring
+        new_keys = [leg['key'] for leg in filled_legs]
+        self.api.subscribe_instruments(new_keys, mode="option_greeks")
+        time.sleep(1)
+        
         trade_id = f"VG42_{int(datetime.now().timestamp())}"
         entry_premium = sum(l['entry_price'] * l['filled_qty'] for l in filled_legs if l['side'] == 'SELL')
         db.save_trade(trade_id, mandate.strategy_type, mandate.expiry_date, filled_legs, entry_premium, mandate.risk_per_lot * mandate.max_lots)
-        
         short_legs = [l for l in filled_legs if l['side'] == 'SELL']
         gtt_ids = []
         for leg in short_legs:
@@ -1441,7 +1159,6 @@ class TradingOrchestrator:
             if gid:
                 gtt_ids.append(gid)
         self.executor.verify_gtt(gtt_ids)
-        
         risk_manager = RiskManager(self.api, filled_legs, mandate.expiry_date)
         threading.Thread(target=risk_manager.monitor, daemon=True).start()
         logger.info(f"Trade opened: {trade_id}")
@@ -1451,7 +1168,6 @@ class TradingOrchestrator:
         logger.info("Starting AUTO MODE")
         telegram.send("Auto-trading activated", "SYSTEM")
         session = SessionManager()
-        
         if not session.validate_session():
             logger.critical("Session Invalid. Stopping.")
             return
@@ -1459,7 +1175,6 @@ class TradingOrchestrator:
             logger.info("Today is a Trading Holiday.")
             telegram.send("Market Closed (Holiday).", "SYSTEM")
             return
-        
         while True:
             try:
                 loop_start_time = time.time()
@@ -1475,14 +1190,11 @@ class TradingOrchestrator:
                     logger.debug("Outside trading hours")
                     time.sleep(600)
                     continue
-                
                 if not self.api.check_socket_health():
                     logger.warning("WebSocket Stale. Restarting...")
                     self.api.market_streamer = None
                     self.api.start_market_stream([ProductionConfig.NIFTY_KEY, ProductionConfig.VIX_KEY])
-
                 positions = self.api.get_positions()
-                # FIX: Check if positions list has any open positions properly
                 has_open_positions = False
                 if positions and len(positions) > 0:
                     for p in positions:
@@ -1490,25 +1202,21 @@ class TradingOrchestrator:
                         if qty != 0:
                             has_open_positions = True
                             break
-                
                 if has_open_positions:
                     logger.debug("Positions already open")
                     time.sleep(60)
                     continue
-                
                 if self.last_analysis:
                     age = (datetime.now() - self.last_analysis['timestamp']).seconds
                     if age < ProductionConfig.ANALYSIS_INTERVAL:
                         logger.debug(f"Analysis fresh ({age}s)")
                         time.sleep(60)
                         continue
-                
                 analysis = self.run_analysis()
                 if not analysis:
                     logger.warning("Analysis failed")
                     time.sleep(600)
                     continue
-                
                 trade_id = self.execute_best_mandate(analysis)
                 if trade_id:
                     logger.info(f"Trade {trade_id} opened")
@@ -1527,7 +1235,6 @@ class TradingOrchestrator:
                 else:
                     logger.info("No trade executed")
                     time.sleep(ProductionConfig.ANALYSIS_INTERVAL)
-                
                 db.update_system_vitals((time.time()-loop_start_time)*1000, psutil.cpu_percent(interval=0.1), psutil.virtual_memory().percent)
             except KeyboardInterrupt:
                 logger.info("Stopped by user")
@@ -1543,19 +1250,16 @@ def main():
     parser = argparse.ArgumentParser(description="VOLGUARD v42.5 - FIXED")
     parser.add_argument('--mode', choices=['analysis', 'auto'], default='analysis')
     args = parser.parse_args()
-    
     try:
         ProductionConfig.validate()
         logger.info("Configuration validated")
     except Exception as e:
         logger.critical(f"Configuration error: {e}")
         sys.exit(1)
-    
     db.set_state("system_version", "42.5-FIXED")
     logger.info("Database initialized (WAL Mode enabled)")
-    telegram.send("System startup successful (v42.5 - WebSocket + DataFrame FIXED)", "SUCCESS")
+    telegram.send("System startup successful (v42.5 - ALL 5 FIXES APPLIED)", "SUCCESS")
     orchestrator = TradingOrchestrator()
-    
     try:
         if args.mode == 'analysis':
             logger.info("Running ANALYSIS mode")
