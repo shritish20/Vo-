@@ -1,9 +1,10 @@
 """
 VOLGUARD 2.0 - Production Trading System
-Version: 42.4 (CRITICAL FIXES)
-- Fixed WebSocket dictionary iteration crash
-- Fixed Risk Manager blind spot (LTP not updating)
-- Changed mode to option_chain for both Greeks + LTP
+Version: 42.5 (CRITICAL FIXES - COMPLETE)
+- Fixed WebSocket mode (full instead of option_chain)
+- Fixed DataFrame boolean ambiguity
+- Fixed dictionary iteration crash
+- Fixed Risk Manager LTP updates
 """
 
 import os
@@ -157,7 +158,7 @@ class TelegramAlerter:
             "INFO": "ℹ️", "SUCCESS": "✅", "TRADE": "💰", "SYSTEM": "⚙️"
         }
         prefix = emoji_map.get(level, "📢")
-        full_msg = f"{prefix} *VOLGUARD v42.4*\n{message}"
+        full_msg = f"{prefix} *VOLGUARD v42.5*\n{message}"
         try:
             requests.post(
                 f"{self.base_url}/sendMessage",
@@ -424,11 +425,13 @@ class UpstoxAPIClient:
             response = self.session.get(url, timeout=5)
             if response.status_code == 200:
                 data = response.json().get('data', [])
-                if data and any(h.get('holiday_type') == 'TRADING_HOLIDAY' for h in data):
-                    logger.info(f"Market Closed: {data[0].get('description')}")
-                    return False
+                if data and len(data) > 0:
+                    if any(h.get('holiday_type') == 'TRADING_HOLIDAY' for h in data):
+                        logger.info(f"Market Closed: {data[0].get('description')}")
+                        return False
             return True
-        except: return True
+        except:
+            return True
     
     def check_margin_requirement(self, legs: List[Dict]) -> float:
         try:
@@ -445,7 +448,8 @@ class UpstoxAPIClient:
             if response.status_code == 200:
                 return float(response.json().get('data', {}).get('required_margin', 0.0))
             return float('inf')
-        except: return float('inf')
+        except:
+            return float('inf')
 
     def get_gtt_order_details(self, gtt_id: str) -> Optional[str]:
         try:
@@ -495,60 +499,68 @@ class UpstoxAPIClient:
                     df['timestamp'] = pd.to_datetime(df['timestamp'])
                     df.set_index('timestamp', inplace=True)
                     return df.astype(float).sort_index()
-        except: pass
+        except:
+            pass
         return pd.DataFrame()
     
     def check_socket_health(self):
-        """v42.4: Heartbeat Check"""
+        """v42.5: Heartbeat Check"""
         with self.streamer_lock:
             last_time = self.latest_prices.get('_last_update_ts', 0)
-            if time.time() - last_time > 10: return False
+            if time.time() - last_time > 10:
+                return False
             return True
 
     def start_market_stream(self, instruments: List[str]):
-        """CRITICAL FIX: Changed to option_chain mode and fixed dictionary parsing"""
-        if self.market_streamer is not None: return
+        """CRITICAL FIX: Changed to 'full' mode - CORRECT Upstox V3 mode"""
+        if self.market_streamer is not None:
+            return
 
         try:
             def on_message(message):
                 with self.streamer_lock:
                     self.latest_prices['_last_update_ts'] = time.time()
                     
-                    # FIX 1: Handle 'feeds' as a Dictionary (key -> feed_data)
+                    # FIX: Handle 'feeds' as Dictionary (key -> feed_data)
                     feeds = message.get('feeds', {})
+                    if not isinstance(feeds, dict):
+                        return
+                    
                     for key, feed_data in feeds.items():
+                        if not isinstance(feed_data, dict):
+                            continue
                         
-                        # FIX 2: Extract LTP (Critical for Risk Manager)
-                        # Upstox V3 can nest data in 'fullFeed' or directly in feed_data
+                        # Extract LTP - Critical for Risk Manager
+                        ltp = 0
                         if 'ltpc' in feed_data:
                             ltp = feed_data['ltpc'].get('ltp', 0)
-                            if ltp > 0:
-                                self.latest_prices[key] = ltp
-                        elif 'fullFeed' in feed_data and 'ltpc' in feed_data['fullFeed']:
-                            ltp = feed_data['fullFeed']['ltpc'].get('ltp', 0)
-                            if ltp > 0:
-                                self.latest_prices[key] = ltp
+                        elif 'fullFeed' in feed_data and isinstance(feed_data['fullFeed'], dict):
+                            if 'ltpc' in feed_data['fullFeed']:
+                                ltp = feed_data['fullFeed']['ltpc'].get('ltp', 0)
                         
-                        # FIX 3: Extract Greeks
+                        if ltp > 0:
+                            self.latest_prices[key] = ltp
+                        
+                        # Extract Greeks
                         greeks = None
                         if 'optionGreeks' in feed_data:
                             greeks = feed_data['optionGreeks']
-                        elif 'fullFeed' in feed_data and 'optionGreeks' in feed_data['fullFeed']:
-                            greeks = feed_data['fullFeed']['optionGreeks']
+                        elif 'fullFeed' in feed_data and isinstance(feed_data['fullFeed'], dict):
+                            if 'optionGreeks' in feed_data['fullFeed']:
+                                greeks = feed_data['fullFeed']['optionGreeks']
                         
-                        if greeks:
+                        if greeks and isinstance(greeks, dict):
                             self.latest_prices[f"{key}_greeks"] = greeks
             
             def on_open(): 
-                logger.info("✅ WebSocket Connected (option_chain mode - LTP + Greeks)")
+                logger.info("✅ WebSocket Connected (full mode - LTP + Greeks)")
             
             def on_error(error):
                 logger.error(f"WebSocket Error: {error}")
             
-            # FIX 4: Changed mode from "option_greeks" to "option_chain"
-            # This ensures we get BOTH LTP and Greeks
+            # FIX: Use 'full' mode - this is the correct Upstox V3 mode
             self.market_streamer = upstox_client.MarketDataStreamerV3(
-                self.api_client, instruments, mode="option_chain"
+                self.api_client, instruments, mode="full"
             )
             self.market_streamer.on("message", on_message)
             self.market_streamer.on("open", on_open)
@@ -559,6 +571,7 @@ class UpstoxAPIClient:
             logger.info("WebSocket initialization complete")
         except Exception as e:
             logger.error(f"WebSocket start failed: {e}")
+            traceback.print_exc()
     
     def get_live_prices(self, keys: List[str]) -> Dict[str, float]:
         with self.streamer_lock:
@@ -572,19 +585,23 @@ class UpstoxAPIClient:
             )
             if response.status_code == 200:
                 data = response.json().get('data', [])
-                if not data: return None, None, None, 0
+                if not data:
+                    return None, None, None, 0
                 lot_size = next((int(c['lot_size']) for c in data if 'lot_size' in c), 0)
                 expiry_dates = sorted(list(set([datetime.strptime(c['expiry'], "%Y-%m-%d").date() for c in data if c.get('expiry')])))
                 valid_dates = [d for d in expiry_dates if d >= date.today()]
-                if not valid_dates: return None, None, None, lot_size
+                if not valid_dates:
+                    return None, None, None, lot_size
                 weekly = valid_dates[0]
                 next_weekly = valid_dates[1] if len(valid_dates) > 1 else valid_dates[0]
                 current_month = date.today().month
                 monthly_candidates = [d for d in valid_dates if d.month == (current_month + 1 if current_month < 12 else 1)]
-                if not monthly_candidates: monthly_candidates = [d for d in valid_dates if d.month == current_month]
+                if not monthly_candidates:
+                    monthly_candidates = [d for d in valid_dates if d.month == current_month]
                 monthly = monthly_candidates[-1] if monthly_candidates else valid_dates[-1]
                 return weekly, monthly, next_weekly, lot_size
-        except: pass
+        except:
+            pass
         return None, None, None, 0
     
     def get_option_chain(self, expiry_date: date) -> pd.DataFrame:
@@ -616,7 +633,8 @@ class UpstoxAPIClient:
                     'ce_key': x['call_options']['instrument_key'],
                     'pe_key': x['put_options']['instrument_key']
                 } for x in data])
-        except: pass
+        except:
+            pass
         return pd.DataFrame()
     
     def place_order(self, instrument_key: str, qty: int, side: str, 
@@ -645,7 +663,8 @@ class UpstoxAPIClient:
                 'avg_price': float(response.average_price) if response.average_price else 0,
                 'filled_qty': int(response.filled_quantity) if response.filled_quantity else 0,
             }
-        except: return None
+        except:
+            return None
     
     def cancel_order(self, order_id: str) -> bool:
         try:
@@ -653,20 +672,24 @@ class UpstoxAPIClient:
             api_instance.cancel_order(order_id=order_id)
             logger.info(f"ORDER CANCELLED: {order_id}")
             return True
-        except: return False
+        except:
+            return False
     
     def get_positions(self) -> List[Dict]:
         try:
             api_instance = upstox_client.PortfolioApi(self.api_client)
-            return api_instance.get_positions().data or []
-        except: return []
+            positions = api_instance.get_positions().data or []
+            return positions
+        except:
+            return []
     
     def get_funds(self) -> float:
         try:
             api_instance = upstox_client.UserApi(self.api_client)
             response = api_instance.get_user_fund_margin(segment="SEC")
             return float(response.data.equity.available_margin)
-        except: return 0.0
+        except:
+            return 0.0
 
 api_client = UpstoxAPIClient()
 
@@ -680,9 +703,11 @@ class ParticipantDataFetcher:
         now = datetime.now(tz)
         dates = []
         candidate = now
-        if candidate.hour < 18: candidate -= timedelta(days=1)
+        if candidate.hour < 18:
+            candidate -= timedelta(days=1)
         while len(dates) < 2:
-            if candidate.weekday() < 5: dates.append(candidate)
+            if candidate.weekday() < 5:
+                dates.append(candidate)
             candidate -= timedelta(days=1)
         return dates
     
@@ -701,7 +726,8 @@ class ParticipantDataFetcher:
                         df = pd.read_csv(io.StringIO(content), skiprows=idx)
                         df.columns = df.columns.str.strip()
                         return df
-        except: pass
+        except:
+            pass
         return None
     
     @staticmethod
@@ -722,7 +748,8 @@ class ParticipantDataFetcher:
                     put_net=float(row['Option Index Put Long']) - float(row['Option Index Put Short']),
                     stock_net=float(row['Future Stock Long']) - float(row['Future Stock Short'])
                 )
-            except: data[p] = None
+            except:
+                data[p] = None
         return data
     
     @classmethod
@@ -732,9 +759,10 @@ class ParticipantDataFetcher:
         logger.info(f"Fetching participant data for {today.strftime('%d-%b-%Y')}")
         df_today = cls.fetch_oi_csv(today)
         df_yest = cls.fetch_oi_csv(yest)
-        if df_today is None: return None, None, 0.0, today.strftime('%d-%b-%Y')
+        if df_today is None:
+            return None, None, 0.0, today.strftime('%d-%b-%Y')
         today_data = cls.process_participant_data(df_today)
-        yest_data = cls.process_participant_data(df_yest) if df_yest else {}
+        yest_data = cls.process_participant_data(df_yest) if df_yest is not None else {}
         fii_net_change = 0.0
         if today_data.get('FII') and yest_data.get('FII'):
             fii_net_change = today_data['FII'].fut_net - yest_data['FII'].fut_net
@@ -760,7 +788,8 @@ class AnalyticsEngine:
         is_fallback = False
         spot = spot_live if spot_live > 0 else (nifty_hist.iloc[-1]['close'] if not nifty_hist.empty else 0)
         vix = vix_live if vix_live > 0 else (vix_hist.iloc[-1]['close'] if not vix_hist.empty else 0)
-        if spot_live <= 0 or vix_live <= 0: is_fallback = True
+        if spot_live <= 0 or vix_live <= 0:
+            is_fallback = True
         
         returns = np.log(nifty_hist['close'] / nifty_hist['close'].shift(1)).dropna()
         rv7 = returns.rolling(7).std().iloc[-1] * np.sqrt(252) * 100
@@ -769,12 +798,14 @@ class AnalyticsEngine:
         
         def fit_garch(horizon):
             try:
-                if len(returns) < 100: return 0
+                if len(returns) < 100:
+                    return 0
                 model = arch_model(returns * 100, vol='Garch', p=1, q=1, dist='normal')
                 result = model.fit(disp='off', show_warning=False)
                 forecast = result.forecast(horizon=horizon, reindex=False)
                 return np.sqrt(forecast.variance.values[-1, -1]) * np.sqrt(252)
-            except: return 0
+            except:
+                return 0
         
         garch7 = fit_garch(7) or rv7
         garch28 = fit_garch(28) or rv28
@@ -791,14 +822,19 @@ class AnalyticsEngine:
         vov_zscore = (vov - vov_mean) / vov_std if vov_std > 0 else 0
         
         def calc_ivp(window):
-            if len(vix_hist) < window: return 0.0
+            if len(vix_hist) < window:
+                return 0.0
             history = vix_hist['close'].tail(window)
             return (history < vix).mean() * 100
         
         ivp_30d, ivp_90d, ivp_1yr = calc_ivp(30), calc_ivp(90), calc_ivp(252)
         
         ma20 = nifty_hist['close'].rolling(20).mean().iloc[-1]
-        true_range = pd.concat([nifty_hist['high']-nifty_hist['low'], (nifty_hist['high']-nifty_hist['close'].shift(1)).abs(), (nifty_hist['low']-nifty_hist['close'].shift(1)).abs()], axis=1).max(axis=1)
+        true_range = pd.concat([
+            nifty_hist['high']-nifty_hist['low'],
+            (nifty_hist['high']-nifty_hist['close'].shift(1)).abs(),
+            (nifty_hist['low']-nifty_hist['close'].shift(1)).abs()
+        ], axis=1).max(axis=1)
         atr14 = true_range.rolling(14).mean().iloc[-1]
         trend_strength = abs(spot - ma20) / atr14 if atr14 > 0 else 0
         
@@ -813,7 +849,8 @@ class AnalyticsEngine:
         )
     
     def get_struct_metrics(self, chain, spot, lot_size) -> StructMetrics:
-        if chain.empty or spot == 0: return StructMetrics(0, 0, 0, "NEUTRAL", 0, 0, 0, "NEUTRAL", lot_size)
+        if chain.empty or spot == 0:
+            return StructMetrics(0, 0, 0, "NEUTRAL", 0, 0, 0, "NEUTRAL", lot_size)
         subset = chain[(chain['strike'] > spot * 0.90) & (chain['strike'] < spot * 1.10)]
         net_gex = ((subset['ce_gamma'] * subset['ce_oi']).sum() - (subset['pe_gamma'] * subset['pe_oi']).sum()) * spot * lot_size
         total_oi_value = (chain['ce_oi'].sum() + chain['pe_oi'].sum()) * spot * lot_size
@@ -829,14 +866,16 @@ class AnalyticsEngine:
             ce_25d_idx = (chain['ce_delta'].abs() - 0.25).abs().argsort()[:1]
             pe_25d_idx = (chain['pe_delta'].abs() - 0.25).abs().argsort()[:1]
             skew_25d = chain.iloc[pe_25d_idx]['pe_iv'].values[0] - chain.iloc[ce_25d_idx]['ce_iv'].values[0]
-        except: skew_25d = 0
+        except:
+            skew_25d = 0
         
         oi_regime = "BULLISH" if pcr > 1.2 else "BEARISH" if pcr < 0.8 else "NEUTRAL"
         return StructMetrics(net_gex, gex_ratio, total_oi_value, gex_regime, pcr, max_pain, skew_25d, oi_regime, lot_size)
     
     def get_edge_metrics(self, weekly_chain, monthly_chain, spot, vol: VolMetrics) -> EdgeMetrics:
         def get_atm_iv(chain):
-            if chain.empty or spot == 0: return 0
+            if chain.empty or spot == 0:
+                return 0
             atm_idx = (chain['strike'] - spot).abs().argsort()[:1]
             row = chain.iloc[atm_idx].iloc[0]
             return (row['ce_iv'] + row['pe_iv']) / 2
@@ -874,9 +913,12 @@ class AnalyticsEngine:
         flow_regime = "NEUTRAL"
         if participant_data and participant_data.get('FII'):
             fii_net = participant_data['FII'].fut_net
-            if fii_net > ProductionConfig.FII_STRONG_LONG: flow_regime = "STRONG_LONG"
-            elif fii_net < ProductionConfig.FII_STRONG_SHORT: flow_regime = "STRONG_SHORT"
-            elif abs(fii_net) > ProductionConfig.FII_MODERATE: flow_regime = "MODERATE_LONG" if fii_net > 0 else "MODERATE_SHORT"
+            if fii_net > ProductionConfig.FII_STRONG_LONG:
+                flow_regime = "STRONG_LONG"
+            elif fii_net < ProductionConfig.FII_STRONG_SHORT:
+                flow_regime = "STRONG_SHORT"
+            elif abs(fii_net) > ProductionConfig.FII_MODERATE:
+                flow_regime = "MODERATE_LONG" if fii_net > 0 else "MODERATE_SHORT"
         
         return ExternalMetrics(
             fii=participant_data.get('FII') if participant_data else None,
@@ -905,38 +947,60 @@ class RegimeEngine:
         weighted_vrp = (garch_val * 0.70) + (park_val * 0.15) + (rv_val * 0.15)
         edge_score = 5.0
         
-        if weighted_vrp > 4.0: edge_score += 3.0
-        elif weighted_vrp > 2.0: edge_score += 2.0
-        elif weighted_vrp > 1.0: edge_score += 1.0
-        elif weighted_vrp < 0: edge_score -= 3.0
+        if weighted_vrp > 4.0:
+            edge_score += 3.0
+        elif weighted_vrp > 2.0:
+            edge_score += 2.0
+        elif weighted_vrp > 1.0:
+            edge_score += 1.0
+        elif weighted_vrp < 0:
+            edge_score -= 3.0
         
-        if edge.term_regime == "BACKWARDATION" and edge.term_spread < -2.0: edge_score += 1.0
-        elif edge.term_regime == "CONTANGO": edge_score += 0.5
+        if edge.term_regime == "BACKWARDATION" and edge.term_spread < -2.0:
+            edge_score += 1.0
+        elif edge.term_regime == "CONTANGO":
+            edge_score += 0.5
         edge_score = max(0, min(10, edge_score))
         
         vol_score = 5.0
-        if vol.vov_zscore > ProductionConfig.VOV_CRASH_ZSCORE: vol_score = 0.0
-        elif vol.vov_zscore > ProductionConfig.VOV_WARNING_ZSCORE: vol_score -= 3.0
-        elif vol.vov_zscore < 1.5: vol_score += 1.5
-        if vol.ivp_1yr > ProductionConfig.HIGH_VOL_IVP: vol_score += 0.5
-        elif vol.ivp_1yr < ProductionConfig.LOW_VOL_IVP: vol_score -= 2.5
-        else: vol_score += 1.0
+        if vol.vov_zscore > ProductionConfig.VOV_CRASH_ZSCORE:
+            vol_score = 0.0
+        elif vol.vov_zscore > ProductionConfig.VOV_WARNING_ZSCORE:
+            vol_score -= 3.0
+        elif vol.vov_zscore < 1.5:
+            vol_score += 1.5
+        if vol.ivp_1yr > ProductionConfig.HIGH_VOL_IVP:
+            vol_score += 0.5
+        elif vol.ivp_1yr < ProductionConfig.LOW_VOL_IVP:
+            vol_score -= 2.5
+        else:
+            vol_score += 1.0
         vol_score = max(0, min(10, vol_score))
         
         struct_score = 5.0
-        if struct.gex_regime == "STICKY": struct_score += 2.5 if expiry_type == "WEEKLY" and time.dte_weekly <= 1 else 1.0
-        elif struct.gex_regime == "SLIPPERY": struct_score -= 1.0
-        if 0.9 < struct.pcr < 1.1: struct_score += 1.0
-        elif struct.pcr > 1.3 or struct.pcr < 0.7: struct_score -= 0.5
-        if abs(struct.skew_25d) > 3.0: struct_score -= 0.5
+        if struct.gex_regime == "STICKY":
+            struct_score += 2.5 if expiry_type == "WEEKLY" and time.dte_weekly <= 1 else 1.0
+        elif struct.gex_regime == "SLIPPERY":
+            struct_score -= 1.0
+        if 0.9 < struct.pcr < 1.1:
+            struct_score += 1.0
+        elif struct.pcr > 1.3 or struct.pcr < 0.7:
+            struct_score -= 0.5
+        if abs(struct.skew_25d) > 3.0:
+            struct_score -= 0.5
         struct_score = max(0, min(10, struct_score))
         
         risk_score = 10.0
-        if external.fast_vol: risk_score -= 2.0
-        if external.flow_regime == "STRONG_SHORT": risk_score -= 3.0
-        elif external.flow_regime == "STRONG_LONG": risk_score += 1.0
-        if expiry_type == "WEEKLY" and time.is_gamma_week: risk_score -= 2.0
-        elif expiry_type == "MONTHLY" and time.is_gamma_month: risk_score -= 2.5
+        if external.fast_vol:
+            risk_score -= 2.0
+        if external.flow_regime == "STRONG_SHORT":
+            risk_score -= 3.0
+        elif external.flow_regime == "STRONG_LONG":
+            risk_score += 1.0
+        if expiry_type == "WEEKLY" and time.is_gamma_week:
+            risk_score -= 2.0
+        elif expiry_type == "MONTHLY" and time.is_gamma_month:
+            risk_score -= 2.5
         risk_score = max(0, min(10, risk_score))
         
         composite = (vol_score * ProductionConfig.WEIGHT_VOL +
@@ -970,11 +1034,14 @@ class RegimeEngine:
             regime_name = "CASH"; allocation = 0.0; strategy = "CASH"; suggested = "NONE"
             rationale.append("Regime Unfavorable: Cash is a position")
         
-        if vol.vov_zscore > ProductionConfig.VOV_WARNING_ZSCORE: warnings.append(f"⚠️ HIGH VOL-OF-VOL ({vol.vov_zscore:.2f}σ)")
+        if vol.vov_zscore > ProductionConfig.VOV_WARNING_ZSCORE:
+            warnings.append(f"⚠️ HIGH VOL-OF-VOL ({vol.vov_zscore:.2f}σ)")
         if external.flow_regime == "STRONG_SHORT" and external.fii:
-            warnings.append(f"⚠️ FII DUMPING"); allocation = min(allocation, 30.0)
+            warnings.append(f"⚠️ FII DUMPING")
+            allocation = min(allocation, 30.0)
         if dte <= ProductionConfig.GAMMA_DANGER_DTE and expiry_type == "WEEKLY":
-            warnings.append(f"⚠️ GAMMA RISK"); allocation *= 0.5
+            warnings.append(f"⚠️ GAMMA RISK")
+            allocation *= 0.5
         
         deployable = ProductionConfig.BASE_CAPITAL * (allocation / 100.0)
         risk_per_lot = ProductionConfig.MARGIN_SELL_BASE if strategy != "DEFENSIVE" else ProductionConfig.MARGIN_SELL_BASE * 0.6
@@ -1002,7 +1069,8 @@ class StrategyFactory:
             bid = row[f'{type_.lower()}_bid']
             ask = row[f'{type_.lower()}_ask']
             ltp = row[f'{type_.lower()}_ltp']
-            if ltp <= 0 or ask <= 0: continue
+            if ltp <= 0 or ask <= 0:
+                continue
             
             spread = (ask - bid) / ltp
             if spread > ProductionConfig.MAX_BID_ASK_SPREAD:
@@ -1022,14 +1090,16 @@ class StrategyFactory:
         return None
     
     def generate(self, mandate: TradingMandate, chain: pd.DataFrame, lot_size: int) -> List[Dict]:
-        if mandate.max_lots == 0 or chain.empty: return []
+        if mandate.max_lots == 0 or chain.empty:
+            return []
         
         qty = mandate.max_lots * lot_size
         legs = []
         
         def get_safe_leg(type_, delta, side, role):
             l = self.find_leg(chain, type_, delta)
-            if l: return {**l, 'side': side, 'role': role, 'qty': qty}
+            if l:
+                return {**l, 'side': side, 'role': role, 'qty': qty}
             return None
 
         if mandate.suggested_structure == "IRON_CONDOR":
@@ -1070,12 +1140,15 @@ class ExecutionEngine:
         logger.info(f"PLACING {leg['side']} {leg['strike']} @ {limit_price}")
         order_id = self.api.place_order(leg['key'], leg['qty'], leg['side'], "LIMIT", limit_price)
         
-        if not order_id: return None
+        if not order_id:
+            return None
         
         start = time.time()
         while (time.time() - start) < ProductionConfig.ORDER_TIMEOUT:
             status = self.api.get_order_status(order_id)
-            if not status: time.sleep(0.5); continue
+            if not status:
+                time.sleep(0.5)
+                continue
             
             if status['status'] == 'complete':
                 if status['filled_qty'] < leg['qty'] * ProductionConfig.PARTIAL_FILL_TOLERANCE:
@@ -1098,7 +1171,8 @@ class ExecutionEngine:
         time.sleep(1)
         final = self.api.get_order_status(order_id)
         if final and final['status'] == 'complete':
-            leg['entry_price'] = final['avg_price']; leg['filled_qty'] = final['filled_qty']
+            leg['entry_price'] = final['avg_price']
+            leg['filled_qty'] = final['filled_qty']
             return leg
         return None
     
@@ -1117,8 +1191,10 @@ class ExecutionEngine:
             future_to_leg = {executor.submit(self._execute_leg_atomic, leg): leg for leg in hedges}
             hedge_failed = False
             for future in concurrent.futures.as_completed(future_to_leg):
-                if not future.result(): hedge_failed = True
-                else: executed.append(future.result())
+                if not future.result():
+                    hedge_failed = True
+                else:
+                    executed.append(future.result())
         
         if hedge_failed or len(executed) != len(hedges):
             logger.critical("Aborting before Cores. Flattening Hedges.")
@@ -1131,8 +1207,10 @@ class ExecutionEngine:
             future_to_leg = {executor.submit(self._execute_leg_atomic, leg): leg for leg in cores}
             core_failed = False
             for future in concurrent.futures.as_completed(future_to_leg):
-                if not future.result(): core_failed = True
-                else: executed.append(future.result())
+                if not future.result():
+                    core_failed = True
+                else:
+                    executed.append(future.result())
 
         if core_failed:
             self.flatten(executed)
@@ -1143,16 +1221,19 @@ class ExecutionEngine:
         return executed
     
     def verify_gtt(self, gtt_ids: List[str]):
-        if not gtt_ids: return
+        if not gtt_ids:
+            return
         logger.info(f"Verifying {len(gtt_ids)} GTT Orders...")
         verified = 0
         for gid in gtt_ids:
             status = api_client.get_gtt_order_details(gid)
-            if status == 'active': verified += 1
+            if status == 'active':
+                verified += 1
             else:
                 logger.critical(f"GTT {gid} FAILURE: {status}")
                 telegram.send(f"GTT FAILURE: {gid} is {status}", "CRITICAL")
-        if verified == len(gtt_ids): telegram.send(f"Shield Up: {verified} GTTs Active", "INFO")
+        if verified == len(gtt_ids):
+            telegram.send(f"Shield Up: {verified} GTTs Active", "INFO")
 
     def flatten(self, legs):
         logger.critical("🚨 EMERGENCY FLATTEN")
@@ -1162,11 +1243,13 @@ class ExecutionEngine:
             self.api.place_order(leg['key'], leg['filled_qty'], side, "MARKET", 0)
 
 # ==========================================
-# RISK MANAGER (FIXED - Now receives LTP)
+# RISK MANAGER (FIXED)
 # ==========================================
 class RiskManager:
     def __init__(self, api: UpstoxAPIClient, legs, expiry_date):
-        self.api = api; self.legs = legs; self.expiry = expiry_date
+        self.api = api
+        self.legs = legs
+        self.expiry = expiry_date
         self.running = True
         credit = sum(l['entry_price'] * l['filled_qty'] for l in legs if l['side'] == 'SELL')
         debit = sum(l['entry_price'] * l['filled_qty'] for l in legs if l['side'] == 'BUY')
@@ -1178,7 +1261,8 @@ class RiskManager:
             try:
                 self._update_dashboard_state()
                 if (self.expiry - date.today()).days <= ProductionConfig.EXIT_DTE:
-                    self.flatten_all("DTE_EXIT"); return
+                    self.flatten_all("DTE_EXIT")
+                    return
                 
                 keys = [l['key'] for l in self.legs]
                 prices = self.api.get_live_prices(keys)
@@ -1190,15 +1274,19 @@ class RiskManager:
                     current_pnl += pnl
                 
                 if current_pnl < -(self.net_premium * ProductionConfig.STOP_LOSS_PCT):
-                    self.flatten_all("STOP_LOSS_PREMIUM"); return
+                    self.flatten_all("STOP_LOSS_PREMIUM")
+                    return
                 if self.max_spread_loss > 0 and current_pnl < -(self.max_spread_loss * 0.8):
-                    self.flatten_all("STOP_LOSS_MAX_RISK"); return
+                    self.flatten_all("STOP_LOSS_MAX_RISK")
+                    return
                 if self.net_premium > 0 and current_pnl >= (self.net_premium * ProductionConfig.TARGET_PROFIT_PCT):
-                    self.flatten_all("TARGET_PROFIT"); return
+                    self.flatten_all("TARGET_PROFIT")
+                    return
                 
                 time.sleep(ProductionConfig.POLL_INTERVAL)
             except Exception as e:
-                logger.error(f"Risk manager error: {e}"); time.sleep(5)
+                logger.error(f"Risk manager error: {e}")
+                time.sleep(5)
     
     def _update_dashboard_state(self):
         p_delta = p_theta = p_gamma = current_pnl = 0.0
@@ -1209,7 +1297,7 @@ class RiskManager:
             direction = -1 if leg['side'] == 'SELL' else 1
             current_pnl += ((leg['entry_price'] - ltp) if leg['side'] == 'SELL' else (ltp - leg['entry_price'])) * leg['filled_qty']
             greeks = prices.get(f"{leg['key']}_greeks")
-            if greeks:
+            if greeks and isinstance(greeks, dict):
                 p_delta += (greeks.get('delta', 0) * leg['filled_qty'] * direction)
                 p_theta += (greeks.get('theta', 0) * leg['filled_qty'] * direction)
                 p_gamma += (greeks.get('gamma', 0) * leg['filled_qty'] * direction)
@@ -1226,25 +1314,34 @@ class RiskManager:
         pending_exits = [l for l in self.legs if l['filled_qty'] > 0]
         
         for leg in pending_exits:
-            retry_count = 0; max_retries = 3; success = False
+            retry_count = 0
+            max_retries = 3
+            success = False
             while retry_count < max_retries and not success:
                 try:
                     side = 'SELL' if leg['side'] == 'BUY' else 'BUY'
                     oid = self.api.place_order(leg['key'], leg['filled_qty'], side, "MARKET", 0)
                     if oid:
-                        for _ in range(5): 
+                        for _ in range(5):
                             status = self.api.get_order_status(oid)
                             if status and status['status'] == 'complete':
-                                logger.info(f"✅ Exited {leg['key']}"); success = True; break
+                                logger.info(f"✅ Exited {leg['key']}")
+                                success = True
+                                break
                             elif status and status['status'] in ['rejected', 'cancelled']:
-                                logger.error(f"Exit Rejected: {status.get('message')}"); break 
+                                logger.error(f"Exit Rejected: {status.get('message')}")
+                                break
                             time.sleep(0.5)
-                    if not success: raise Exception("Order not confirmed")
+                    if not success:
+                        raise Exception("Order not confirmed")
                 except Exception as e:
-                    logger.error(f"Exit failed {leg['key']}: {e}"); retry_count += 1; time.sleep(0.5)
+                    logger.error(f"Exit failed {leg['key']}: {e}")
+                    retry_count += 1
+                    time.sleep(0.5)
             if not success:
                 msg = f"CRITICAL: FAILED TO CLOSE {leg['key']}. MANUALLY EXIT NOW!"
-                logger.critical(msg); telegram.send(msg, "CRITICAL")
+                logger.critical(msg)
+                telegram.send(msg, "CRITICAL")
         self.running = False
 
 # ==========================================
@@ -1268,17 +1365,20 @@ class TradingOrchestrator:
         vix_hist = self.api.get_history(ProductionConfig.VIX_KEY)
         
         if nifty_hist.empty:
-            logger.error("Failed to fetch historical data"); return None
+            logger.error("Failed to fetch historical data")
+            return None
         
         live_prices = self.api.get_live_prices([ProductionConfig.NIFTY_KEY, ProductionConfig.VIX_KEY])
         weekly, monthly, next_weekly, lot_size = self.api.get_expiries()
         if not weekly or not monthly:
-            logger.error("Failed to fetch expiries"); return None
+            logger.error("Failed to fetch expiries")
+            return None
         
         weekly_chain = self.api.get_option_chain(weekly)
         monthly_chain = self.api.get_option_chain(monthly)
         if weekly_chain.empty and monthly_chain.empty:
-            logger.error("Failed to fetch option chains"); return None
+            logger.error("Failed to fetch option chains")
+            return None
         
         time_metrics = self.analytics.get_time_metrics(weekly, monthly, next_weekly)
         vol_metrics = self.analytics.get_vol_metrics(
@@ -1311,14 +1411,22 @@ class TradingOrchestrator:
         mandate = weekly_mandate if weekly_mandate.score.composite > monthly_mandate.score.composite else monthly_mandate
         chain = analysis['weekly_chain'] if mandate == weekly_mandate else analysis['monthly_chain']
         
-        if mandate.max_lots == 0: logger.info(f"Mandate is CASH - no trade"); return None
-        if circuit_breaker.is_active(): logger.warning("Circuit breaker active - skipping trade"); return None
+        if mandate.max_lots == 0:
+            logger.info(f"Mandate is CASH - no trade")
+            return None
+        if circuit_breaker.is_active():
+            logger.warning("Circuit breaker active - skipping trade")
+            return None
         
         legs = self.factory.generate(mandate, chain, analysis['lot_size'])
-        if not legs: logger.error("Failed to generate legs"); return None
+        if not legs:
+            logger.error("Failed to generate legs")
+            return None
         
         filled_legs = self.executor.execute_strategy(legs)
-        if not filled_legs: logger.error("Execution failed"); return None
+        if not filled_legs:
+            logger.error("Execution failed")
+            return None
         
         trade_id = f"VG42_{int(datetime.now().timestamp())}"
         entry_premium = sum(l['entry_price'] * l['filled_qty'] for l in filled_legs if l['side'] == 'SELL')
@@ -1330,7 +1438,8 @@ class TradingOrchestrator:
             sl_price = leg['entry_price'] * (1 + mandate.risk_per_lot/10000)
             target_price = leg['entry_price'] * 0.20
             gid = self.api.place_gtt_order(leg['key'], leg['filled_qty'], 'BUY', round(sl_price, 1), round(target_price, 1))
-            if gid: gtt_ids.append(gid)
+            if gid:
+                gtt_ids.append(gid)
         self.executor.verify_gtt(gtt_ids)
         
         risk_manager = RiskManager(self.api, filled_legs, mandate.expiry_date)
@@ -1343,18 +1452,29 @@ class TradingOrchestrator:
         telegram.send("Auto-trading activated", "SYSTEM")
         session = SessionManager()
         
-        if not session.validate_session(): logger.critical("Session Invalid. Stopping."); return
-        if not self.api.is_market_open_today(): 
-            logger.info("Today is a Trading Holiday."); telegram.send("Market Closed (Holiday).", "SYSTEM"); return
+        if not session.validate_session():
+            logger.critical("Session Invalid. Stopping.")
+            return
+        if not self.api.is_market_open_today():
+            logger.info("Today is a Trading Holiday.")
+            telegram.send("Market Closed (Holiday).", "SYSTEM")
+            return
         
         while True:
             try:
                 loop_start_time = time.time()
-                if not session.validate_session(): logger.critical("Session Invalid."); break
+                if not session.validate_session():
+                    logger.critical("Session Invalid.")
+                    break
                 now = datetime.now()
-                if now.weekday() >= 5: logger.info("Weekend"); time.sleep(3600); continue
+                if now.weekday() >= 5:
+                    logger.info("Weekend")
+                    time.sleep(3600)
+                    continue
                 if not (ProductionConfig.SAFE_ENTRY_START <= (now.hour, now.minute) <= ProductionConfig.SAFE_EXIT_END):
-                    logger.debug("Outside trading hours"); time.sleep(600); continue
+                    logger.debug("Outside trading hours")
+                    time.sleep(600)
+                    continue
                 
                 if not self.api.check_socket_health():
                     logger.warning("WebSocket Stale. Restarting...")
@@ -1362,33 +1482,65 @@ class TradingOrchestrator:
                     self.api.start_market_stream([ProductionConfig.NIFTY_KEY, ProductionConfig.VIX_KEY])
 
                 positions = self.api.get_positions()
-                if any(int(p.get('quantity', 0)) != 0 for p in positions):
-                    logger.debug("Positions already open"); time.sleep(60); continue
+                # FIX: Check if positions list has any open positions properly
+                has_open_positions = False
+                if positions and len(positions) > 0:
+                    for p in positions:
+                        qty = int(p.get('quantity', 0)) if hasattr(p, 'get') else int(getattr(p, 'quantity', 0))
+                        if qty != 0:
+                            has_open_positions = True
+                            break
+                
+                if has_open_positions:
+                    logger.debug("Positions already open")
+                    time.sleep(60)
+                    continue
                 
                 if self.last_analysis:
                     age = (datetime.now() - self.last_analysis['timestamp']).seconds
                     if age < ProductionConfig.ANALYSIS_INTERVAL:
-                        logger.debug(f"Analysis fresh ({age}s)"); time.sleep(60); continue
+                        logger.debug(f"Analysis fresh ({age}s)")
+                        time.sleep(60)
+                        continue
                 
                 analysis = self.run_analysis()
-                if not analysis: logger.warning("Analysis failed"); time.sleep(600); continue
+                if not analysis:
+                    logger.warning("Analysis failed")
+                    time.sleep(600)
+                    continue
                 
                 trade_id = self.execute_best_mandate(analysis)
                 if trade_id:
-                    logger.info(f"Trade {trade_id} opened"); 
+                    logger.info(f"Trade {trade_id} opened")
                     while True:
                         positions = self.api.get_positions()
-                        if all(int(p.get('quantity', 0)) == 0 for p in positions): break
+                        all_closed = True
+                        if positions and len(positions) > 0:
+                            for p in positions:
+                                qty = int(p.get('quantity', 0)) if hasattr(p, 'get') else int(getattr(p, 'quantity', 0))
+                                if qty != 0:
+                                    all_closed = False
+                                    break
+                        if all_closed:
+                            break
                         time.sleep(60)
-                else: logger.info("No trade executed"); time.sleep(ProductionConfig.ANALYSIS_INTERVAL)
+                else:
+                    logger.info("No trade executed")
+                    time.sleep(ProductionConfig.ANALYSIS_INTERVAL)
                 
                 db.update_system_vitals((time.time()-loop_start_time)*1000, psutil.cpu_percent(interval=0.1), psutil.virtual_memory().percent)
-            except KeyboardInterrupt: logger.info("Stopped by user"); break
-            except Exception as e: logger.error(f"Auto-trading error: {e}"); telegram.send(f"Error: {str(e)}", "ERROR"); time.sleep(300)
+            except KeyboardInterrupt:
+                logger.info("Stopped by user")
+                break
+            except Exception as e:
+                logger.error(f"Auto-trading error: {e}")
+                traceback.print_exc()
+                telegram.send(f"Error: {str(e)}", "ERROR")
+                time.sleep(300)
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="VOLGUARD v42.4 - FIXED")
+    parser = argparse.ArgumentParser(description="VOLGUARD v42.5 - FIXED")
     parser.add_argument('--mode', choices=['analysis', 'auto'], default='analysis')
     args = parser.parse_args()
     
@@ -1396,11 +1548,12 @@ def main():
         ProductionConfig.validate()
         logger.info("Configuration validated")
     except Exception as e:
-        logger.critical(f"Configuration error: {e}"); sys.exit(1)
+        logger.critical(f"Configuration error: {e}")
+        sys.exit(1)
     
-    db.set_state("system_version", "42.4-FIXED")
+    db.set_state("system_version", "42.5-FIXED")
     logger.info("Database initialized (WAL Mode enabled)")
-    telegram.send("System startup successful (v42.4 - WebSocket FIXED)", "SUCCESS")
+    telegram.send("System startup successful (v42.5 - WebSocket + DataFrame FIXED)", "SUCCESS")
     orchestrator = TradingOrchestrator()
     
     try:
@@ -1421,14 +1574,21 @@ def main():
             else:
                 print("⚠️  AUTO MODE REQUESTED")
                 try:
-                    if input("Type 'I ACCEPT THE RISK' to continue: ") == "I ACCEPT THE RISK": orchestrator.run_auto_mode()
-                    else: logger.info("Auto mode cancelled")
-                except EOFError: logger.critical("No input available. Set VG_AUTO_CONFIRM=TRUE"); sys.exit(1)
+                    if input("Type 'I ACCEPT THE RISK' to continue: ") == "I ACCEPT THE RISK":
+                        orchestrator.run_auto_mode()
+                    else:
+                        logger.info("Auto mode cancelled")
+                except EOFError:
+                    logger.critical("No input available. Set VG_AUTO_CONFIRM=TRUE")
+                    sys.exit(1)
     except Exception as e:
-        logger.critical(f"Unhandled exception: {e}"); traceback.print_exc()
-        telegram.send(f"System crashed: {str(e)}", "CRITICAL"); sys.exit(1)
+        logger.critical(f"Unhandled exception: {e}")
+        traceback.print_exc()
+        telegram.send(f"System crashed: {str(e)}", "CRITICAL")
+        sys.exit(1)
     finally:
-        logger.info("System shutdown"); telegram.send("System shutdown", "SYSTEM")
+        logger.info("System shutdown")
+        telegram.send("System shutdown", "SYSTEM")
 
 if __name__ == "__main__":
     main()
