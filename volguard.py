@@ -110,10 +110,10 @@ class ProductionConfig:
     LOG_LEVEL = logging.INFO
     
     # Market Hours
-    MARKET_OPEN = (00, 00)
-    MARKET_CLOSE = (23, 59)
-    SAFE_ENTRY_START = (00, 00)
-    SAFE_EXIT_END = (23, 59)
+    MARKET_OPEN = (9, 15)
+    MARKET_CLOSE = (15, 30)
+    SAFE_ENTRY_START = (9, 45)
+    SAFE_EXIT_END = (15, 15)
     
     # Breakers
     MAX_CONSECUTIVE_LOSSES = 3
