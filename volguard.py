@@ -533,20 +533,37 @@ class UpstoxAPIClient:
         except:
             return []
     
-    # FIX #5: Corrected funds access
+    # FIX #5: Corrected funds access (SDK Version)
     def get_funds(self) -> float:
         try:
             api_instance = upstox_client.UserApi(self.api_client)
-            response = api_instance.get_user_fund_margin(segment="SEC")
+            
+            # The SDK method expects 'api_version', not 'segment'
+            response = api_instance.get_user_fund_margin(api_version="2.0")
+            
+            # Check if response has data
+            if not hasattr(response, 'data') or not response.data:
+                logger.error("Funds API returned no data")
+                return 0.0
+
             data = response.data
+
+            # Case A: SDK returns an object (Standard behavior)
             if hasattr(data, 'equity'):
-                return float(data.equity.available_margin)
+                # Safely access available_margin, defaulting to 0.0 if missing
+                return float(getattr(data.equity, 'available_margin', 0.0))
+            
+            # Case B: SDK returns a dictionary (Fallback)
             elif isinstance(data, dict) and 'equity' in data:
-                return float(data['equity']['available_margin'])
+                return float(data['equity'].get('available_margin', 0.0))
+
+            logger.warning("Funds data structure unrecognized (no 'equity' key found)")
             return 0.0
+
         except Exception as e:
             logger.error(f"Funds fetch failed: {e}")
             return 0.0
+
 
 api_client = UpstoxAPIClient()
 
