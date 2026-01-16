@@ -5,10 +5,9 @@ services:
     build: .
     container_name: volguard_v42
     restart: unless-stopped
-    # -----------------------------------------------------
-    # CRITICAL FIX 1: INCREASE SHARED MEMORY FOR MULTIPROCESSING
-    # -----------------------------------------------------
     shm_size: '2gb'
+    ports:
+      - "8080:8080"          # <-- health-check endpoint
     volumes:
       - ./volguard_data:/app/data
       - ./volguard_logs:/app/logs
@@ -17,11 +16,7 @@ services:
     deploy:
       resources:
         limits:
-          # -----------------------------------------------------
-          # CRITICAL FIX 2: INCREASE CPU HEADROOM
-          # Prevents WebSocket starvation during math operations
-          # -----------------------------------------------------
-          cpus: '2.0' 
+          cpus: '2.0'
           memory: 2G
         reservations:
           cpus: '0.5'
@@ -33,20 +28,15 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
-    user: "0:0" # -----------------------------------------------------
-                # FIX 3: RUN AS ROOT TO READ DB FILE
-                # (Not best practice for enterprise, but necessary
-                # for simple file sharing between containers)
-                # -----------------------------------------------------
+    user: "0:0"
     environment:
       - GF_INSTALL_PLUGINS=frser-sqlite-datasource
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
-      # Allow local file access for SQLite
       - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=frser-sqlite-datasource
     volumes:
-      # Mount as read-only to prevent Grafana from locking the DB
-      - ./volguard_data:/var/lib/grafana/data/volguard_mount:ro 
+      # read-only mount to avoid WAL lock
+      - ./volguard_data:/var/lib/grafana/data/volguard_mount:ro
       - grafana_data:/var/lib/grafana
 
 volumes:
