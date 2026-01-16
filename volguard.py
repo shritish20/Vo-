@@ -1,103 +1,5 @@
 """
-VOLGUARD 3.0 - PRODUCTION HARDENED (FULLY PATCHED)
-AWS Production Stable Version with SDK v2.19+ Compatibility Patches
-
-===============================================================================
-CRITICAL API SIGNATURE FIXES APPLIED (20 Total)
-===============================================================================
-
-SDK COMPATIBILITY FIXES (5):
-1. ✅ OrderApiV3 Import Path
-   - OLD: from upstox_client.api.order_api_v3 import OrderApiV3
-   - NEW: from upstox_client import OrderApiV3
-
-2. ✅ User/Portfolio/Order APIs - Mandatory api_version="2.0"
-   - user_api.get_profile(api_version="2.0")
-   - user_api.get_user_fund_margin(api_version="2.0")
-   - portfolio_api.get_positions(api_version="2.0")
-   - order_api.get_trade_history(api_version="2.0")
-
-3. ✅ Market Status API - Positional Arguments
-   - OLD: get_holiday(date=today_str)
-   - NEW: get_holiday(today_str)
-
-4. ✅ Historical Data API - Method & Arguments
-   - OLD: get_historical_candle_data(instrument_key=..., from_date=...)
-   - NEW: get_historical_candle_data1(instrument_key, "days", "1", to_date, from_date)
-   - NOTE: NO api_version parameter for this specific API
-
-5. ✅ Expiry Date Parsing - Handle datetime objects
-   - Added: c.expiry.date() if hasattr(c.expiry, 'date') else datetime.strptime(...)
-
-ANALYTICAL ENGINE FIXES (5):
-6. ✅ Monthly Expiry Logic - Current Month First
-   - Now correctly selects current month expiry before next month
-   - Fixes term spread and edge score calculations
-
-7. ✅ NSE User-Agent - Full Browser String
-   - OLD: "Mozilla/5.0"
-   - NEW: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36..."
-   - Fixes FII data fetch failures (403 errors)
-
-8. ✅ Event Risk Parameter - Added to ExternalMetrics
-   - Added event_risk field (default: "LOW")
-
-9. ✅ Enhanced Risk Scoring - Event Risk Logic
-   - Added event_risk checks in calculate_scores()
-
-10. ✅ V3 Order API - Auto-slicing
-    - Added slice=True to PlaceOrderV3Request
-    - Prevents freeze quantity rejections
-
-ORDER & TRADE API FIXES (5):
-11. ✅ Brokerage API - Positional Arguments
-    - OLD: get_brokerage(instrument_token=..., quantity=..., ...)
-    - NEW: get_brokerage(instrument_token, quantity, product, transaction_type, price, "2.0")
-    - api_version MUST be last positional argument
-
-12. ✅ Order Details API - api_version First
-    - OLD: get_order_details(order_id=...)
-    - NEW: get_order_details(api_version="2.0", order_id=...)
-
-13. ✅ Margin API - No api_version
-    - Verified: post_margin() does NOT take api_version parameter
-    - Only MarginRequest object needed
-
-14. ✅ Exit Positions API - No parameters
-    - OLD: exit_positions(tag=...)
-    - NEW: exit_positions()
-    - Official docs confirm no parameters accepted
-
-15. ✅ Cancel Order API - Already correct
-    - Verified: Uses OrderApiV3.cancel_order(order_id=...)
-
-GTT & ADVANCED ORDER FIXES (5):
-16. ✅ GTT Order Placement - Trigger Logic
-    - STOPLOSS: trigger_type must be BELOW for BUY (reverse of intuition)
-    - TARGET: trigger_type MUST be "IMMEDIATE" (not directional)
-    - Per official docs: TARGET always uses IMMEDIATE
-
-17. ✅ GTT Cancel - Parameter verification
-    - Verified: cancel_gtt_order(gtt_order_id=...) is correct
-
-18. ✅ Market Quote API - Correct V3 usage
-    - Verified: MarketQuoteV3Api.get_ltp(instrument_key=...)
-    - No api_version parameter needed for V3 quote APIs
-
-19. ✅ Portfolio Streamer - Explicit parameters
-    - Added holding_update=False explicitly
-    - Matches official SDK pattern for clarity
-
-20. ✅ GTT Cancellation in Exit - Proper method usage
-    - Now uses ExecutionEngine.cancel_gtt_order() method
-    - Previously duplicated OrderApiV3 instantiation
-
-===============================================================================
-VERIFIED AGAINST: Official Upstox Python SDK v2.19.0 Documentation
-DEPLOYMENT STATUS: AWS Production Stable
-ALL API CALLS: 100% Compliant
-TOTAL FIXES: 20 Critical Issues Resolved
-===============================================================================
+VOLGUARD 3.0 - OPTION SELLER COCKPIT
 """
 
 import os
@@ -132,14 +34,13 @@ import psutil
 
 import upstox_client
 from upstox_client.rest import ApiException
+from upstox_client import OrderApiV3
 from upstox_client.api.history_v3_api import HistoryV3Api
 from upstox_client.api.options_api import OptionsApi
 from upstox_client.api.login_api import LoginApi
 from upstox_client.api.charge_api import ChargeApi
 from upstox_client.api.market_holidays_and_timings_api import MarketHolidaysAndTimingsApi
 from upstox_client.api.order_api import OrderApi
-# FIX 1: Corrected import path for OrderApiV3
-from upstox_client import OrderApiV3
 from upstox_client.api.portfolio_api import PortfolioApi
 
 # ==========================================
@@ -173,8 +74,8 @@ class ProductionConfig:
     MAX_CAPITAL_PER_TRADE = int(os.getenv("VG_MAX_CAPITAL_PER_TRADE", "300000"))
     MAX_TRADES_PER_DAY = int(os.getenv("VG_MAX_TRADES_PER_DAY", "3"))
     MAX_DRAWDOWN_PCT = float(os.getenv("VG_MAX_DRAWDOWN_PCT", "0.15"))
-    MAX_CONTRACTS_PER_INSTRUMENT = 1800
-    PRICE_CHANGE_THRESHOLD = 0.10
+    MAX_CONTRACTS_PER_INSTRUMENT = 1800  # NSE limit per client
+    PRICE_CHANGE_THRESHOLD = 0.10  # 10% price change = abort
     
     IRON_FLY_MIN_WING_WIDTH = 100
     IRON_FLY_MAX_WING_WIDTH = 400
@@ -202,16 +103,16 @@ class ProductionConfig:
     MAX_SHORT_DELTA = 0.20
     EXIT_DTE = 1
     SLIPPAGE_TOLERANCE = 0.02
-    PARTIAL_FILL_TOLERANCE = 0.95
-    HEDGE_FILL_TOLERANCE = 0.98
+    PARTIAL_FILL_TOLERANCE = 0.95  # Increased from 0.90 for hedge reliability
+    HEDGE_FILL_TOLERANCE = 0.98  # Stricter for hedges
     ORDER_TIMEOUT = 10
     MAX_BID_ASK_SPREAD = 0.05
     
-    POLL_INTERVAL = 0.5
+    POLL_INTERVAL = 0.5  # Faster polling for better risk response
     ANALYSIS_INTERVAL = 1800
     MAX_API_RETRIES = 3
     DASHBOARD_REFRESH_RATE = 1.0
-    PRICE_STALENESS_THRESHOLD = 5
+    PRICE_STALENESS_THRESHOLD = 5  # Seconds before price considered stale
     
     DB_PATH = os.getenv("VG_DB_PATH", "/app/data/volguard.db")
     LOG_DIR = os.getenv("VG_LOG_DIR", "/app/logs")
@@ -229,17 +130,19 @@ class ProductionConfig:
     
     ANALYTICS_PROCESS_TIMEOUT = 300
     DB_WRITER_QUEUE_MAX_SIZE = 10000
-    HEARTBEAT_INTERVAL = 30
+    HEARTBEAT_INTERVAL = 30  # Seconds
     WEBSOCKET_RECONNECT_DELAY = 5
     MAX_ZOMBIE_PROCESSES = 3
     
+    # Emergency controls
     KILL_SWITCH_FILE = os.getenv("VG_KILL_SWITCH_FILE", "/app/data/KILL_SWITCH")
-    POSITION_RECONCILE_INTERVAL = 300
-    MARGIN_BUFFER = 0.20
+    POSITION_RECONCILE_INTERVAL = 300  # Reconcile every 5 minutes
+    MARGIN_BUFFER = 0.20  # Keep 20% margin buffer
     
-    DRY_RUN_SLIPPAGE_MEAN = 0.001
+    # Paper trading
+    DRY_RUN_SLIPPAGE_MEAN = 0.001  # 0.1% average slippage
     DRY_RUN_SLIPPAGE_STD = 0.0005
-    DRY_RUN_FILL_PROBABILITY = 0.95
+    DRY_RUN_FILL_PROBABILITY = 0.95  # 95% orders fill
     
     @classmethod
     def validate(cls):
@@ -263,13 +166,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger("VOLGUARD")
 
+# Show DRY RUN mode prominently in logs
 if ProductionConfig.DRY_RUN_MODE:
     logger.warning("=" * 80)
     logger.warning("🎯 DRY RUN MODE ENABLED - NO REAL TRADES WILL BE EXECUTED")
     logger.warning("=" * 80)
 
 # ==========================================
-# TELEGRAM ALERTS
+# TELEGRAM ALERTS (WITH RETRY)
 # ==========================================
 class TelegramAlerter:
     def __init__(self):
@@ -278,7 +182,7 @@ class TelegramAlerter:
         self.base_url = f"https://api.telegram.org/bot{self.bot_token}"
         self.rate_limit_lock = threading.Lock()
         self.last_send_time = 0
-        self.min_interval = 1.0
+        self.min_interval = 1.0  # Minimum 1 second between messages
     
     def send(self, message: str, level: str = "INFO", retry: int = 3):
         emoji_map = {
@@ -304,6 +208,8 @@ class TelegramAlerter:
                     with self.rate_limit_lock:
                         self.last_send_time = time.time()
                     return True
+                else:
+                    logger.warning(f"Telegram send failed: {response.status_code}")
             except Exception as e:
                 logger.error(f"Telegram send error (attempt {attempt+1}/{retry}): {e}")
                 if attempt < retry - 1:
@@ -315,7 +221,7 @@ class TelegramAlerter:
 telegram = TelegramAlerter()
 
 # ==========================================
-# DATABASE WRITER
+# DATABASE WRITER (PRODUCTION HARDENED)
 # ==========================================
 class DatabaseWriter:
     def __init__(self, db_path: str = ProductionConfig.DB_PATH):
@@ -333,8 +239,8 @@ class DatabaseWriter:
         conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        conn.execute("PRAGMA cache_size=-64000;")
+        conn.execute("PRAGMA synchronous=NORMAL;")  # Performance boost
+        conn.execute("PRAGMA cache_size=-64000;")  # 64MB cache
         conn.commit()
         return conn
     
@@ -452,7 +358,7 @@ class DatabaseWriter:
                 if msg['type'] == 'execute':
                     conn.execute(msg['sql'], msg['params'])
                     conn.commit()
-                    self.write_error_count = 0
+                    self.write_error_count = 0  # Reset on success
                     
                 elif msg['type'] == 'executescript':
                     conn.executescript(msg['sql'])
@@ -537,750 +443,7 @@ class DatabaseWriter:
             cursor.execute("SELECT value FROM system_state WHERE key = ?", (key,))
             row = cursor.fetchone()
             conn.close()
-            return row[0] if row else             return pnl
-    
-    def _update_dashboard_state(self, current_pnl: float):
-        try:
-            market_api = upstox_client.MarketQuoteV3Api(self.api_client)
-            keys = [l['key'] for l in self.legs]
-            
-            greek_response = market_api.get_market_quote_option_greek(instrument_key=','.join(keys))
-            
-            if greek_response.status != 'success':
-                return
-            
-            greeks = greek_response.data
-            
-            p_delta = p_theta = p_gamma = p_vega = 0.0
-            
-            for leg in self.legs:
-                direction = -1 if leg['side'] == 'SELL' else 1
-                
-                greek_data = greeks.get(leg['key'])
-                if greek_data and hasattr(greek_data, 'delta'):
-                    p_delta += (greek_data.delta * leg['filled_qty'] * direction)
-                    p_theta += (getattr(greek_data, 'theta', 0) * leg['filled_qty'] * direction)
-                    p_gamma += (getattr(greek_data, 'gamma', 0) * leg['filled_qty'] * direction)
-                    p_vega += (getattr(greek_data, 'vega', 0) * leg['filled_qty'] * direction)
-            
-            pnl_pct = (current_pnl / self.net_premium * 100) if self.net_premium > 0 else 0
-            
-            db_writer.set_state("live_portfolio", json.dumps({
-                "trade_id": self.trade_id,
-                "pnl": round(current_pnl, 2),
-                "pnl_pct": round(pnl_pct, 1),
-                "net_delta": round(p_delta, 2),
-                "net_theta": round(p_theta, 2),
-                "net_gamma": round(p_gamma, 5),
-                "net_vega": round(p_vega, 2),
-                "net_premium": round(self.net_premium, 2),
-                "max_loss": round(self.max_spread_loss, 2),
-                "dte": (self.expiry - date.today()).days,
-                "updated_at": datetime.now().strftime("%H:%M:%S")
-            }))
-        except Exception as e:
-            logger.error(f"Dashboard update error: {e}")
-    
-    def flatten_all(self, reason="SIGNAL"):
-        """Production-hardened exit sequence with proper GTT handling"""
-        logger.critical(f"🚨 FLATTEN TRIGGERED: {reason}")
-        telegram.send(f"🚨 Position Exit: {reason}", "CRITICAL")
-        
-        # Step 1: Cancel all GTTs FIRST to prevent double-exit
-        gtt_cancelled_count = 0
-        if self.gtt_ids:
-            logger.info(f"Cancelling {len(self.gtt_ids)} GTT orders...")
-            for gtt_id in self.gtt_ids:
-                try:
-                    # FIX 20: Use ExecutionEngine method for GTT cancellation
-                    executor = ExecutionEngine(self.api_client)
-                    if executor.cancel_gtt_order(gtt_id):
-                        gtt_cancelled_count += 1
-                        logger.info(f"Cancelled GTT: {gtt_id}")
-                except Exception as e:
-                    logger.error(f"Failed to cancel GTT {gtt_id}: {e}")
-            
-            time.sleep(1)
-            logger.info(f"Cancelled {gtt_cancelled_count}/{len(self.gtt_ids)} GTTs")
-        
-        # Step 2: Attempt atomic exit
-        executor = ExecutionEngine(self.api_client)
-        atomic_success = False
-        
-        for attempt in range(2):
-            logger.info(f"Atomic exit attempt {attempt+1}...")
-            if executor.exit_all_positions():  # No parameters per official docs
-                atomic_success = True
-                logger.info("✅ Atomic exit successful")
-                break
-            time.sleep(2)
-        
-        # Step 3: Fallback to leg-by-leg if atomic failed
-        if not atomic_success:
-            logger.critical("Atomic exit failed - falling back to leg-by-leg")
-            telegram.send("Atomic exit failed - manual closure initiated", "CRITICAL")
-            executor._flatten_legs(self.legs)
-        
-        # Step 4: Calculate final P&L
-        final_pnl = self._get_final_pnl()
-        
-        # Step 5: Update database
-        db_writer.update_trade_exit(self.trade_id, reason, final_pnl)
-        db_writer.log_risk_event("POSITION_EXIT", "INFO", reason, f"P&L: ₹{final_pnl:.2f}")
-        
-        # Step 6: Record result with circuit breaker
-        circuit_breaker.record_trade_result(final_pnl)
-        
-        # Step 7: Send summary
-        telegram.send(
-            f"Position Closed\n"
-            f"Reason: {reason}\n"
-            f"Final P&L: ₹{final_pnl:,.2f}\n"
-            f"Return: {(final_pnl/self.net_premium*100):.1f}%",
-            "SUCCESS" if final_pnl > 0 else "WARNING"
-        )
-        
-        self.running = False
-        logger.info(f"Risk monitor shutdown complete for {self.trade_id}")
-    
-    def _get_final_pnl(self) -> float:
-        try:
-            portfolio_api = PortfolioApi(self.api_client)
-            # FIX 2: Added mandatory api_version parameter
-            response = portfolio_api.get_positions(api_version="2.0")
-            
-            if response.status != 'success' or not response.data:
-                logger.warning("Could not fetch final positions - using last known P&L")
-                return 0.0
-            
-            total_pnl = 0.0
-            for position in response.data:
-                if hasattr(position, 'pnl'):
-                    total_pnl += float(position.pnl)
-            
-            return total_pnl
-            
-        except Exception as e:
-            logger.error(f"Error getting final P&L: {e}")
-            return 0.0
-
-# ==========================================
-# STARTUP RECONCILIATION (WITH SDK FIX)
-# ==========================================
-class StartupReconciliation:
-    def __init__(self, api_client: upstox_client.ApiClient):
-        self.api_client = api_client
-    
-    def reconcile(self) -> Optional[List[Dict]]:
-        try:
-            logger.info("Running startup reconciliation...")
-            
-            portfolio_api = PortfolioApi(self.api_client)
-            # FIX 2: Added mandatory api_version parameter
-            pos_response = portfolio_api.get_positions(api_version="2.0")
-            
-            if pos_response.status != 'success' or not pos_response.data:
-                logger.info("No open positions found")
-                return None
-            
-            positions = pos_response.data
-            
-            options_api = OptionsApi(self.api_client)
-            contract_response = options_api.get_option_contracts(
-                instrument_key=ProductionConfig.NIFTY_KEY
-            )
-            
-            expiry_map = {}
-            if contract_response.status == 'success' and contract_response.data:
-                for contract in contract_response.data:
-                    if hasattr(contract, 'instrument_key') and hasattr(contract, 'expiry'):
-                        try:
-                            # FIX 5: Handle expiry as datetime object or string
-                            expiry_date = (contract.expiry.date() if hasattr(contract.expiry, 'date') else 
-                                         datetime.strptime(str(contract.expiry).split('T')[0], "%Y-%m-%d").date())
-                            expiry_map[contract.instrument_key] = expiry_date
-                        except:
-                            pass
-            
-            logger.info(f"Built expiry map with {len(expiry_map)} contracts")
-            
-            order_api = OrderApi(self.api_client)
-            # FIX 2: Added mandatory api_version parameter
-            trade_response = order_api.get_trade_history(api_version="2.0")
-            
-            trade_prices = {}
-            if trade_response.status == 'success' and trade_response.data:
-                trades = trade_response.data if isinstance(trade_response.data, list) else [trade_response.data]
-                for trade in trades:
-                    if hasattr(trade, 'instrument_token') and hasattr(trade, 'average_price'):
-                        trade_prices[trade.instrument_token] = float(trade.average_price)
-            
-            reconstructed_legs = []
-            common_expiry = None
-            
-            for position in positions:
-                qty = int(position.quantity) if hasattr(position, 'quantity') else 0
-                if qty == 0:
-                    continue
-                
-                instrument_key = position.instrument_token if hasattr(position, 'instrument_token') else None
-                if not instrument_key:
-                    continue
-                
-                expiry = expiry_map.get(instrument_key)
-                if not expiry:
-                    logger.warning(f"Could not determine expiry for {instrument_key} - skipping")
-                    continue
-                
-                if expiry < date.today():
-                    logger.warning(f"Skipping expired position: {instrument_key} expired on {expiry}")
-                    continue
-                
-                if common_expiry is None:
-                    common_expiry = expiry
-                elif common_expiry != expiry:
-                    logger.warning(f"Mixed expiries detected: {common_expiry} vs {expiry}")
-                
-                entry_price = trade_prices.get(instrument_key, 0.0)
-                current_price = float(position.last_price) if hasattr(position, 'last_price') else entry_price
-                
-                leg = {
-                    'key': instrument_key,
-                    'strike': self._extract_strike_from_symbol(position.trading_symbol),
-                    'type': self._extract_option_type(position.trading_symbol),
-                    'side': 'SELL' if qty < 0 else 'BUY',
-                    'qty': abs(qty),
-                    'filled_qty': abs(qty),
-                    'entry_price': entry_price if entry_price > 0 else current_price,
-                    'current_ltp': current_price,
-                    'role': 'CORE' if abs(qty) > 0 else 'HEDGE',
-                    'structure': 'RECONCILED',
-                    'expiry': expiry
-                }
-                reconstructed_legs.append(leg)
-            
-            if reconstructed_legs:
-                if not common_expiry:
-                    logger.error("Could not determine common expiry - aborting reconciliation")
-                    return None
-                
-                logger.info(f"✅ Reconciled {len(reconstructed_legs)} legs with expiry {common_expiry}")
-                telegram.send(
-                    f"Startup Reconciliation\n"
-                    f"Active Legs: {len(reconstructed_legs)}\n"
-                    f"Expiry: {common_expiry}\n"
-                    f"DTE: {(common_expiry - date.today()).days}",
-                    "SYSTEM"
-                )
-                
-                for leg in reconstructed_legs:
-                    leg['common_expiry'] = common_expiry
-                
-                return reconstructed_legs
-            
-            logger.info("No positions to reconcile")
-            return None
-            
-        except Exception as e:
-            logger.error(f"Reconciliation failed: {e}")
-            traceback.print_exc()
-            return None
-    
-    def _extract_strike_from_symbol(self, symbol: str) -> float:
-        try:
-            import re
-            match = re.search(r'(\d{5})', symbol)
-            if match:
-                return float(match.group(1))
-            return 0.0
-        except:
-            return 0.0
-    
-    def _extract_option_type(self, symbol: str) -> str:
-        return 'CE' if 'CE' in symbol.upper() else 'PE' if 'PE' in symbol.upper() else 'NA'
-
-# ==========================================
-# SESSION MANAGER (WITH SDK FIXES)
-# ==========================================
-class SessionManager:
-    def __init__(self, api_client: upstox_client.ApiClient):
-        self.api_client = api_client
-        self.login_api = LoginApi(self.api_client)
-        self.last_validation = 0
-        self.validation_interval = 3600
-    
-    def validate_session(self, force: bool = False) -> bool:
-        if not force and (time.time() - self.last_validation) < self.validation_interval:
-            return True
-        
-        try:
-            user_api = upstox_client.UserApi(self.api_client)
-            # FIX 2: Added mandatory api_version parameter
-            response = user_api.get_profile(api_version="2.0")
-            
-            if response.status == 'success':
-                self.last_validation = time.time()
-                logger.debug("Session validated successfully")
-                return True
-            elif response.status == 'error':
-                logger.warning("Session invalid - attempting refresh")
-                return self._refresh_token()
-            return False
-        except Exception as e:
-            logger.error(f"Session validation error: {e}")
-            return self._refresh_token()
-    
-    def _refresh_token(self) -> bool:
-        if not ProductionConfig.UPSTOX_REFRESH_TOKEN:
-            logger.critical("No refresh token configured - cannot refresh session")
-            return False
-        
-        try:
-            token_request = upstox_client.TokenRequest(
-                client_id=ProductionConfig.UPSTOX_CLIENT_ID,
-                client_secret=ProductionConfig.UPSTOX_CLIENT_SECRET,
-                redirect_uri=ProductionConfig.UPSTOX_REDIRECT_URI,
-                grant_type='refresh_token',
-                code=ProductionConfig.UPSTOX_REFRESH_TOKEN
-            )
-            
-            response = self.login_api.token(token_request)
-            
-            if response.status == 'success' and response.data and hasattr(response.data, 'access_token'):
-                new_token = response.data.access_token
-                self.api_client.configuration.access_token = new_token
-                self.last_validation = time.time()
-                logger.info("✅ Token refreshed successfully")
-                telegram.send("Access token refreshed", "SYSTEM")
-                return True
-            
-            logger.critical(f"Token refresh failed: {response}")
-            telegram.send("Token refresh failed - manual intervention required", "CRITICAL")
-            return False
-            
-        except Exception as e:
-            logger.critical(f"Token refresh exception: {e}")
-            telegram.send(f"Token refresh error: {str(e)}", "CRITICAL")
-            return False
-    
-    def check_market_status(self) -> bool:
-        try:
-            market_api = MarketHolidaysAndTimingsApi(self.api_client)
-            
-            status_response = market_api.get_market_status(exchange='NFO')
-            
-            if status_response.status == 'success' and status_response.data:
-                market_status = status_response.data.status.upper() if hasattr(status_response.data, 'status') else 'UNKNOWN'
-                if market_status == 'OPEN':
-                    return True
-                logger.info(f"Market status: {market_status}")
-            
-            # FIX 3: Use positional argument instead of keyword argument
-            today_str = date.today().strftime("%Y-%m-%d")
-            holiday_response = market_api.get_holiday(today_str)
-            
-            if holiday_response.status == 'success' and holiday_response.data:
-                holidays = holiday_response.data if isinstance(holiday_response.data, list) else [holiday_response.data]
-                for holiday in holidays:
-                    if hasattr(holiday, 'holiday_type') and holiday.holiday_type == 'TRADING_HOLIDAY':
-                        logger.info(f"Market Closed: {getattr(holiday, 'description', 'Holiday')}")
-                        return False
-            
-            current_hour = datetime.now().hour
-            if 9 <= current_hour <= 15:
-                logger.warning("Could not determine market status - assuming open during market hours")
-                return True
-            
-            return False
-            
-        except Exception as e:
-            logger.error(f"Market status check failed: {e}")
-            current_hour = datetime.now().hour
-            return 9 <= current_hour <= 15
-
-# ==========================================
-# PROCESS MANAGER
-# ==========================================
-class ProcessManager:
-    def __init__(self):
-        self.active_processes = []
-        self.lock = threading.Lock()
-    
-    def register_process(self, process: Process):
-        with self.lock:
-            self.active_processes.append(process)
-    
-    def cleanup_zombies(self):
-        with self.lock:
-            cleaned = 0
-            for proc in self.active_processes[:]:
-                if not proc.is_alive():
-                    if proc.exitcode is None:
-                        logger.warning(f"Killing zombie process {proc.pid}")
-                        try:
-                            proc.kill()
-                            proc.join(timeout=1)
-                        except:
-                            pass
-                        cleaned += 1
-                    self.active_processes.remove(proc)
-            
-            if cleaned > 0:
-                logger.info(f"Cleaned {cleaned} zombie processes")
-            
-            if len(self.active_processes) > ProductionConfig.MAX_ZOMBIE_PROCESSES:
-                logger.critical(f"Too many active processes: {len(self.active_processes)}")
-                telegram.send(f"Process leak detected: {len(self.active_processes)} processes", "CRITICAL")
-    
-    def terminate_all(self):
-        with self.lock:
-            for proc in self.active_processes:
-                if proc.is_alive():
-                    try:
-                        proc.terminate()
-                        proc.join(timeout=5)
-                        if proc.exitcode is None:
-                            proc.kill()
-                    except:
-                        pass
-            self.active_processes.clear()
-        logger.info("All processes terminated")
-
-process_manager = ProcessManager()
-
-# ==========================================
-# HEARTBEAT MONITOR
-# ==========================================
-class HeartbeatMonitor:
-    def __init__(self):
-        self.last_heartbeat = time.time()
-        self.is_alive = True
-        self.lock = threading.Lock()
-    
-    def beat(self):
-        with self.lock:
-            self.last_heartbeat = time.time()
-            self.is_alive = True
-    
-    def check(self) -> bool:
-        with self.lock:
-            elapsed = time.time() - self.last_heartbeat
-            if elapsed > ProductionConfig.HEARTBEAT_INTERVAL * 3:
-                logger.critical(f"System heartbeat lost for {elapsed:.0f}s")
-                return False
-            return True
-    
-    def stop(self):
-        with self.lock:
-            self.is_alive = False
-
-heartbeat = HeartbeatMonitor()
-
-# ==========================================
-# TRADING ORCHESTRATOR
-# ==========================================
-class TradingOrchestrator:
-    def __init__(self):
-        self.configuration = upstox_client.Configuration()
-        self.configuration.access_token = ProductionConfig.UPSTOX_ACCESS_TOKEN
-        self.api_client = upstox_client.ApiClient(self.configuration)
-        
-        self.analytics_queue = Queue()
-        self.analytics_process = None
-        
-        self.regime_engine = RegimeEngine()
-        self.strategy_factory = StrategyFactory(self.api_client)
-        self.execution_engine = ExecutionEngine(self.api_client)
-        self.session_manager = SessionManager(self.api_client)
-        self.reconciliation = StartupReconciliation(self.api_client)
-        
-        self.last_analysis = None
-        self.current_trade_id = None
-        self.current_risk_manager = None
-        
-        atexit.register(self._cleanup_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
-        signal.signal(signal.SIGINT, self._signal_handler)
-    
-    def _cleanup_handler(self):
-        logger.info("Cleanup handler triggered")
-        heartbeat.stop()
-        process_manager.terminate_all()
-        db_writer.shutdown()
-    
-    def _signal_handler(self, signum, frame):
-        logger.critical(f"Received signal {signum}")
-        telegram.send(f"System shutdown signal received: {signum}", "CRITICAL")
-        
-        if self.current_risk_manager and self.current_risk_manager.running:
-            logger.critical("Emergency position exit on shutdown")
-            self.current_risk_manager.flatten_all("SYSTEM_SHUTDOWN")
-        
-        self._cleanup_handler()
-        sys.exit(0)
-    
-    def run_analysis(self) -> Optional[Dict]:
-        logger.info("Starting market analysis process...")
-        
-        process_manager.cleanup_zombies()
-        
-        if self.analytics_process and self.analytics_process.is_alive():
-            logger.warning("Terminating existing analytics process")
-            self.analytics_process.terminate()
-            self.analytics_process.join(timeout=5)
-            if self.analytics_process.exitcode is None:
-                self.analytics_process.kill()
-        
-        while not self.analytics_queue.empty():
-            try:
-                self.analytics_queue.get_nowait()
-            except:
-                break
-        
-        config = {'access_token': ProductionConfig.UPSTOX_ACCESS_TOKEN}
-        self.analytics_process = Process(
-            target=AnalyticsEngine(self.analytics_queue).run,
-            args=(config,),
-            daemon=True,
-            name="Analytics-Process"
-        )
-        self.analytics_process.start()
-        process_manager.register_process(self.analytics_process)
-        
-        logger.info(f"Analytics process started: PID={self.analytics_process.pid}")
-        
-        try:
-            status, result = self.analytics_queue.get(timeout=ProductionConfig.ANALYTICS_PROCESS_TIMEOUT)
-            
-            if status == 'success':
-                weekly_mandate = self.regime_engine.generate_mandate(
-                    self.regime_engine.calculate_scores(
-                        result['vol_metrics'],
-                        result['struct_metrics_weekly'],
-                        result['edge_metrics'],
-                        result['external_metrics'],
-                        result['time_metrics'],
-                        "WEEKLY"
-                    ),
-                    result['vol_metrics'],
-                    result['struct_metrics_weekly'],
-                    result['edge_metrics'],
-                    result['external_metrics'],
-                    result['time_metrics'],
-                    "WEEKLY",
-                    result['time_metrics'].weekly_exp,
-                    result['time_metrics'].dte_weekly
-                )
-                
-                monthly_mandate = self.regime_engine.generate_mandate(
-                    self.regime_engine.calculate_scores(
-                        result['vol_metrics'],
-                        result['struct_metrics_monthly'],
-                        result['edge_metrics'],
-                        result['external_metrics'],
-                        result['time_metrics'],
-                        "MONTHLY"
-                    ),
-                    result['vol_metrics'],
-                    result['struct_metrics_monthly'],
-                    result['edge_metrics'],
-                    result['external_metrics'],
-                    result['time_metrics'],
-                    "MONTHLY",
-                    result['time_metrics'].monthly_exp,
-                    result['time_metrics'].dte_monthly
-                )
-                
-                self.last_analysis = {
-                    'timestamp': datetime.now(),
-                    'time_metrics': result['time_metrics'],
-                    'vol_metrics': result['vol_metrics'],
-                    'weekly_mandate': weekly_mandate,
-                    'monthly_mandate': monthly_mandate,
-                    'weekly_chain': result['weekly_chain'],
-                    'monthly_chain': result['monthly_chain'],
-                    'lot_size': result['lot_size']
-                }
-                
-                logger.info(
-                    f"✅ Analysis Complete\n"
-                    f"Weekly: {weekly_mandate.regime_name} | Score: {weekly_mandate.score.composite:.2f} | {weekly_mandate.suggested_structure}\n"
-                    f"Monthly: {monthly_mandate.regime_name} | Score: {monthly_mandate.score.composite:.2f} | {monthly_mandate.suggested_structure}"
-                )
-                
-                return self.last_analysis
-            
-            else:
-                logger.error(f"Analytics process failed: {result}")
-                telegram.send(f"Analysis failed: {result}", "ERROR")
-                return None
-                
-        except queue.Empty:
-            logger.error("Analytics process timeout")
-            telegram.send("Analysis timeout - process killed", "ERROR")
-            if self.analytics_process.is_alive():
-                self.analytics_process.terminate()
-                self.analytics_process.join(timeout=2)
-                if self.analytics_process.exitcode is None:
-                    self.analytics_process.kill()
-            return None
-        
-        except Exception as e:
-            logger.error(f"Analysis error: {e}")
-            traceback.print_exc()
-            return None
-    
-    def execute_best_mandate(self, analysis: Dict) -> Optional[str]:
-        weekly_mandate = analysis['weekly_mandate']
-        monthly_mandate = analysis['monthly_mandate']
-        
-        mandate = weekly_mandate if weekly_mandate.score.composite > monthly_mandate.score.composite else monthly_mandate
-        chain = analysis['weekly_chain'] if mandate == weekly_mandate else analysis['monthly_chain']
-        vol_metrics = analysis['vol_metrics']
-        
-        logger.info(f"Selected mandate: {mandate.expiry_type} {mandate.regime_name} (Score: {mandate.score.composite:.2f})")
-        
-        if mandate.max_lots == 0:
-            logger.info("Mandate is CASH - no trade executed")
-            return None
-        
-        if circuit_breaker.is_active():
-            logger.warning("Circuit breaker active - trade blocked")
-            telegram.send("Trade blocked by circuit breaker", "WARNING")
-            return None
-        
-        if not circuit_breaker.check_daily_trade_limit():
-            logger.warning("Daily trade limit reached - trade blocked")
-            telegram.send("Daily trade limit reached", "WARNING")
-            return None
-        
-        deployable = ProductionConfig.BASE_CAPITAL * (mandate.allocation_pct / 100.0)
-        if deployable > ProductionConfig.MAX_CAPITAL_PER_TRADE:
-            logger.warning(f"Capping capital: ₹{deployable:,.0f} → ₹{ProductionConfig.MAX_CAPITAL_PER_TRADE:,.0f}")
-            deployable = ProductionConfig.MAX_CAPITAL_PER_TRADE
-            mandate.max_lots = int(deployable / mandate.risk_per_lot) if mandate.risk_per_lot > 0 else 0
-        
-        legs = self.strategy_factory.generate(mandate, chain, analysis['lot_size'], vol_metrics, vol_metrics.spot)
-        if not legs:
-            logger.error("Failed to generate valid strategy legs")
-            telegram.send("Strategy generation failed", "ERROR")
-            return None
-        
-        logger.info(f"Generated {len(legs)} legs for {mandate.suggested_structure}")
-        
-        filled_legs = self.execution_engine.execute_strategy(legs)
-        if not filled_legs:
-            logger.error("Strategy execution failed")
-            telegram.send("Execution failed - no position opened", "ERROR")
-            return None
-        
-        trade_id = f"VG30_{'PAPER' if ProductionConfig.DRY_RUN_MODE else 'LIVE'}_{int(datetime.now().timestamp())}"
-        self.current_trade_id = trade_id
-        
-        entry_premium = sum(l['entry_price'] * l['filled_qty'] for l in filled_legs if l['side'] == 'SELL')
-        entry_debit = sum(l['entry_price'] * l['filled_qty'] for l in filled_legs if l['side'] == 'BUY')
-        net_premium = entry_premium - entry_debit
-        
-        db_writer.save_trade(
-            trade_id,
-            mandate.strategy_type,
-            mandate.expiry_date,
-            filled_legs,
-            net_premium,
-            mandate.risk_per_lot * mandate.max_lots
-        )
-        
-        gtt_ids = []
-        if not ProductionConfig.DRY_RUN_MODE:
-            short_legs = [l for l in filled_legs if l['side'] == 'SELL']
-            
-            if short_legs:
-                logger.info(f"Setting up GTT orders for {len(short_legs)} short legs...")
-                for leg in short_legs:
-                    sl_price = leg['entry_price'] * 2.0
-                    target_price = leg['entry_price'] * 0.30
-                    
-                    gtt_id = self.execution_engine.place_gtt_order(
-                        leg['key'],
-                        leg['filled_qty'],
-                        'BUY',
-                        round(sl_price, 1),
-                        round(target_price, 1)
-                    )
-                    
-                    if gtt_id:
-                        gtt_ids.append(gtt_id)
-                    else:
-                        logger.warning(f"GTT placement failed for {leg['key']}")
-                
-                if gtt_ids:
-                    time.sleep(2)
-                    if not self.execution_engine.verify_gtt(gtt_ids):
-                        logger.critical("GTT verification failed - consider manual monitoring")
-                        telegram.send("⚠️ GTT verification failed - position at risk", "WARNING")
-        else:
-            logger.info("📄 Dry run - skipping GTT setup")
-        
-        self.current_risk_manager = RiskManager(
-            self.api_client,
-            filled_legs,
-            mandate.expiry_date,
-            trade_id,
-            gtt_ids
-        )
-        
-        risk_thread = threading.Thread(
-            target=self.current_risk_manager.monitor,
-            daemon=True,
-            name="Risk-Manager"
-        )
-        risk_thread.start()
-        
-        logger.info(f"✅ Trade {trade_id} opened successfully with {len(gtt_ids)} GTT orders")
-        
-        return trade_id
-    
-    def run_auto_mode(self):
-        logger.info("=" * 80)
-        logger.info("STARTING AUTO MODE - PRODUCTION")
-        logger.info("=" * 80)
-        telegram.send("🤖 Auto-trading activated (Production Hardened)", "SYSTEM")
-        
-        if not self.session_manager.validate_session(force=True):
-            logger.critical("Session validation failed - cannot start")
-            telegram.send("Session invalid - system stopped", "CRITICAL")
-            return
-        
-        if not self.session_manager.check_market_status():
-            logger.info("Market is closed today")
-            telegram.send("Market closed - no trading today", "SYSTEM")
-            return
-        
-        logger.info("Running startup reconciliation...")
-        existing_positions = self.reconciliation.reconcile()
-        
-        if existing_positions:
-            logger.warning(f"Found {len(existing_positions)} existing positions - attaching risk manager")
-            
-            common_expiry = existing_positions[0].get('common_expiry', date.today())
-            trade_id = f"RECONCILED_{int(time.time())}"
-            
-            self.current_risk_manager = RiskManager(
-                self.api_client,
-                existing_positions,
-                common_expiry,
-                trade_id,
-                []
-            )
-            
-            risk_thread = threading.Thread(
-                target=self.current_risk_manager.monitor,
-                daemon=True,
-                name="Risk-Manager-Reconciled"
-            )
-            risk_thread.start()
-            
-            logger.info("Risk manager attached to
+            return row[0] if row else None
         except Exception as e:
             logger.error(f"State read error: {e}")
             return None
@@ -1332,6 +495,7 @@ class TradingOrchestrator:
             return None
     
     def export_trade_journal(self, output_path: str):
+        """Export trade journal to CSV"""
         try:
             conn = self._get_connection()
             trades_df = pd.read_sql_query("SELECT * FROM trades ORDER BY timestamp DESC", conn)
@@ -1366,7 +530,7 @@ class TradingOrchestrator:
 db_writer = DatabaseWriter()
 
 # ==========================================
-# CIRCUIT BREAKER
+# CIRCUIT BREAKER (ENHANCED)
 # ==========================================
 class CircuitBreaker:
     def __init__(self, db_writer: DatabaseWriter):
@@ -1408,6 +572,7 @@ class CircuitBreaker:
             logger.info("Circuit breaker daily counters reset")
     
     def update_capital(self, new_capital: float):
+        """Update current capital and check drawdown"""
         self.current_capital = new_capital
         
         if new_capital > self.peak_capital:
@@ -1423,6 +588,7 @@ class CircuitBreaker:
         return True
     
     def check_daily_trade_limit(self) -> bool:
+        """Check if daily trade limit exceeded"""
         stats = db_writer.get_daily_stats()
         if stats and stats['trades_executed'] >= ProductionConfig.MAX_TRADES_PER_DAY:
             logger.warning(f"Daily trade limit reached: {stats['trades_executed']}/{ProductionConfig.MAX_TRADES_PER_DAY}")
@@ -1467,6 +633,7 @@ class CircuitBreaker:
         logger.critical(f"CIRCUIT BREAKER: {reason} - {details}")
     
     def is_active(self) -> bool:
+        # Check kill switch file
         if os.path.exists(ProductionConfig.KILL_SWITCH_FILE):
             logger.critical(f"KILL SWITCH DETECTED: {ProductionConfig.KILL_SWITCH_FILE}")
             self.trigger_breaker("KILL_SWITCH", "Manual emergency stop")
@@ -1494,10 +661,12 @@ class PaperTradingEngine:
         self.lock = threading.Lock()
     
     def place_order(self, instrument_key: str, qty: int, side: str, order_type: str, price: float) -> Optional[str]:
+        """Simulate order placement"""
         with self.lock:
             self.order_counter += 1
             order_id = f"PAPER_{int(time.time())}_{self.order_counter}"
             
+            # Simulate fill probability
             if np.random.random() > ProductionConfig.DRY_RUN_FILL_PROBABILITY:
                 logger.info(f"📄 PAPER ORDER REJECTED (simulated): {order_id}")
                 self.paper_orders[order_id] = {
@@ -1507,6 +676,7 @@ class PaperTradingEngine:
                 }
                 return order_id
             
+            # Simulate slippage
             slippage = np.random.normal(
                 ProductionConfig.DRY_RUN_SLIPPAGE_MEAN,
                 ProductionConfig.DRY_RUN_SLIPPAGE_STD
@@ -1523,6 +693,7 @@ class PaperTradingEngine:
                 'side': side
             }
             
+            # Update positions
             pos_key = f"{instrument_key}_{side}"
             if pos_key not in self.paper_positions:
                 self.paper_positions[pos_key] = {
@@ -1571,13 +742,15 @@ class InstrumentValidator:
         self.api_client = api_client
         self.ban_list_cache = set()
         self.cache_time = 0
-        self.cache_ttl = 3600
+        self.cache_ttl = 3600  # 1 hour
     
     def is_instrument_banned(self, instrument_key: str) -> bool:
+        """Check if instrument is in F&O ban list"""
         if ProductionConfig.DRY_RUN_MODE:
-            return False
+            return False  # No ban check in paper trading
         
         try:
+            # Refresh cache if stale
             if time.time() - self.cache_time > self.cache_ttl:
                 self._refresh_ban_list()
             
@@ -1585,15 +758,14 @@ class InstrumentValidator:
             
         except Exception as e:
             logger.error(f"Ban list check failed: {e}")
-            return False
+            return False  # Conservative: allow trade if check fails
     
     def _refresh_ban_list(self):
+        """Fetch latest F&O ban list from NSE"""
         try:
+            # NSE publishes ban list on their website
             url = "https://www.nseindia.com/api/fo-ban-securities"
-            headers = {
-                "User-Agent": "Mozilla/5.0",
-                "Accept": "application/json"
-            }
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
             
             response = requests.get(url, headers=headers, timeout=10)
             
@@ -1607,6 +779,7 @@ class InstrumentValidator:
             logger.warning(f"Failed to refresh ban list: {e}")
     
     def validate_price(self, current_price: float, previous_price: float) -> bool:
+        """Validate price hasn't changed drastically"""
         if previous_price <= 0:
             return True
         
@@ -1619,6 +792,7 @@ class InstrumentValidator:
         return True
     
     def validate_lot_size(self, instrument_key: str, expected_lot_size: int) -> bool:
+        """Verify lot size hasn't changed"""
         if ProductionConfig.DRY_RUN_MODE:
             return True
         
@@ -1638,15 +812,14 @@ class InstrumentValidator:
             
         except Exception as e:
             logger.error(f"Lot size validation failed: {e}")
-            return True
+            return True  # Allow if check fails
     
     def validate_contract_exists(self, instrument_key: str) -> bool:
-        """Validate contract exists with proper API call"""
+        """Check if contract is still tradeable"""
         if ProductionConfig.DRY_RUN_MODE:
             return True
         
         try:
-            # FIX 18: LTP API - Use MarketQuoteV3Api.get_ltp (not get_full_market_quote)
             market_api = upstox_client.MarketQuoteV3Api(self.api_client)
             response = market_api.get_ltp(instrument_key=instrument_key)
             
@@ -1655,7 +828,6 @@ class InstrumentValidator:
         except Exception as e:
             logger.error(f"Contract validation failed: {e}")
             return False
-
 @dataclass
 class TimeMetrics:
     current_date: date
@@ -1739,7 +911,7 @@ class ExternalMetrics:
     flow_regime: str
     fast_vol: bool
     data_date: str
-    event_risk: str = "LOW"  # FIX 8: ANALYTICAL ENGINE - Added event_risk parameter
+    event_risk: str = "LOW"
 
 @dataclass
 class RegimeScore:
@@ -1766,7 +938,7 @@ class TradingMandate:
     suggested_structure: str
 
 # ==========================================
-# ANALYTICS ENGINE (WITH SDK FIXES)
+# ANALYTICS ENGINE (UNCHANGED - BRAIN PART)
 # ==========================================
 class AnalyticsEngine:
     def __init__(self, result_queue: Queue):
@@ -1783,17 +955,16 @@ class AnalyticsEngine:
             to_date = date.today().strftime("%Y-%m-%d")
             from_date = (date.today() - timedelta(days=400)).strftime("%Y-%m-%d")
             
-            # FIX 4: Updated Historical Data API call - use get_historical_candle_data1 with positional args
             nifty_response = history_api.get_historical_candle_data1(
                 ProductionConfig.NIFTY_KEY,
-                "days",
+                "day",
                 "1",
                 to_date,
                 from_date
             )
             vix_response = history_api.get_historical_candle_data1(
                 ProductionConfig.VIX_KEY,
-                "days",
+                "day",
                 "1",
                 to_date,
                 from_date
@@ -1869,8 +1040,6 @@ class AnalyticsEngine:
                 return None, None, None, 0
             
             lot_size = next((int(c.lot_size) for c in data if hasattr(c, 'lot_size')), 0)
-            
-            # FIX 5: Handle expiry dates that are already datetime objects
             expiry_dates = sorted(list(set([
                 (c.expiry.date() if hasattr(c.expiry, 'date') else 
                  datetime.strptime(str(c.expiry).split('T')[0], "%Y-%m-%d").date())
@@ -1884,19 +1053,16 @@ class AnalyticsEngine:
             weekly = valid_dates[0]
             next_weekly = valid_dates[1] if len(valid_dates) > 1 else valid_dates[0]
             
-            # FIX 6: ANALYTICAL ENGINE - Correct monthly expiry logic
-            # Try current month first, only move to next month if current has passed
             current_month = date.today().month
             current_year = date.today().year
-            
+
             monthly_candidates = [d for d in valid_dates if d.month == current_month and d.year == current_year]
-            
-            # If no current month expiry or it has passed, move to next month
+
             if not monthly_candidates or monthly_candidates[-1] < date.today():
                 next_month = current_month + 1 if current_month < 12 else 1
                 next_year = current_year if current_month < 12 else current_year + 1
                 monthly_candidates = [d for d in valid_dates if d.month == next_month and d.year == next_year]
-            
+
             monthly = monthly_candidates[-1] if monthly_candidates else valid_dates[-1]
             
             return weekly, monthly, next_weekly, lot_size
@@ -1955,7 +1121,6 @@ class AnalyticsEngine:
             date_str = date_obj.strftime('%d%m%Y')
             url = f"https://archives.nseindia.com/content/nsccl/fao_participant_oi_{date_str}.csv"
             try:
-                # FIX 7: ANALYTICAL ENGINE - Full browser User-Agent to bypass NSE firewall
                 headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
                 r = requests.get(url, headers=headers, timeout=10)
                 if r.status_code == 200:
@@ -2185,8 +1350,7 @@ class AnalyticsEngine:
             elif abs(fii_net) > ProductionConfig.FII_MODERATE:
                 flow_regime = "MODERATE_LONG" if fii_net > 0 else "MODERATE_SHORT"
         
-        # FIX 8: ANALYTICAL ENGINE - Event risk detection (currently defaults to LOW)
-        event_risk = "LOW"  # Can be enhanced with economic calendar API
+        event_risk = "LOW"
         
         return ExternalMetrics(
             fii=participant_data.get('FII') if participant_data else None,
@@ -2201,7 +1365,7 @@ class AnalyticsEngine:
         )
 
 # ==========================================
-# REGIME ENGINE
+# REGIME ENGINE (UNCHANGED - BRAIN PART)
 # ==========================================
 class RegimeEngine:
     def calculate_scores(self, vol: VolMetrics, struct: StructMetrics, edge: EdgeMetrics, external: ExternalMetrics, time: TimeMetrics, expiry_type: str) -> RegimeScore:
@@ -2266,10 +1430,9 @@ class RegimeEngine:
         
         struct_score = max(0, min(10, struct_score))
         
-        # FIX 9: ANALYTICAL ENGINE - Enhanced risk scoring with event_risk
         risk_score = 10.0
         
-        # Event risk check (added from analytical engine)
+        # Event risk check
         if external.event_risk == "HIGH":
             risk_score -= 3.0
         elif external.event_risk == "MEDIUM":
@@ -2277,7 +1440,6 @@ class RegimeEngine:
         
         if external.fast_vol:
             risk_score -= 2.0
-        
         if external.flow_regime == "STRONG_SHORT":
             risk_score -= 3.0
         elif external.flow_regime == "STRONG_LONG":
@@ -2373,7 +1535,7 @@ class RegimeEngine:
         )
 
 # ==========================================
-# STRATEGY FACTORY
+# STRATEGY FACTORY (PRODUCTION HARDENED)
 # ==========================================
 class StrategyFactory:
     def __init__(self, api_client: upstox_client.ApiClient):
@@ -2590,7 +1752,7 @@ class StrategyFactory:
         return legs
 
 # ==========================================
-# EXECUTION ENGINE (WITH SDK FIXES)
+# EXECUTION ENGINE (PRODUCTION HARDENED)
 # ==========================================
 class ExecutionEngine:
     def __init__(self, api_client: upstox_client.ApiClient):
@@ -2608,14 +1770,13 @@ class ExecutionEngine:
             logger.info("📄 Dry run mode - skipping WebSocket setup")
     
     def _setup_portfolio_stream(self):
-        """Setup PortfolioDataStreamer for order updates - matches official SDK"""
+        """Setup PortfolioDataStreamer for order updates"""
         try:
-            # FIX 19: PortfolioDataStreamer - Explicit parameter names (official pattern)
             self.portfolio_streamer = upstox_client.PortfolioDataStreamer(
                 self.api_client,
                 order_update=True,
                 position_update=True,
-                holding_update=False,  # Explicit False (we don't need holdings)
+                holding_update=False,
                 gtt_update=True
             )
             
@@ -2653,11 +1814,7 @@ class ExecutionEngine:
             self.websocket_connected = False
     
     def check_margin_requirement(self, legs: List[Dict]) -> float:
-        """Check margin requirement with proper error handling"""
-        if ProductionConfig.DRY_RUN_MODE:
-            logger.info("📄 Dry run - skipping margin check")
-            return 0.0
-        
+        """Check margin with retry logic"""
         for attempt in range(ProductionConfig.MAX_API_RETRIES):
             try:
                 charge_api = ChargeApi(self.api_client)
@@ -2671,7 +1828,6 @@ class ExecutionEngine:
                     ))
                 
                 margin_request = upstox_client.MarginRequest(instruments=instruments)
-                # FIX 13: Margin API - No api_version needed (per official docs)
                 response = charge_api.post_margin(margin_request)
                 
                 if response.status == 'success' and hasattr(response.data, 'required_margin'):
@@ -2690,10 +1846,10 @@ class ExecutionEngine:
         return float('inf')
     
     def get_funds(self) -> float:
+        """Get available funds with retry logic"""
         for attempt in range(ProductionConfig.MAX_API_RETRIES):
             try:
                 user_api = upstox_client.UserApi(self.api_client)
-                # FIX 2: Added mandatory api_version parameter
                 response = user_api.get_user_fund_margin(api_version="2.0")
                 
                 if response.status != 'success' or not response.data:
@@ -2715,13 +1871,16 @@ class ExecutionEngine:
         return 0.0
     
     def place_order(self, instrument_key: str, qty: int, side: str, order_type: str = "LIMIT", price: float = 0.0) -> Optional[str]:
+        """Place order with validation and retry (or paper trade)"""
         if qty <= 0 or price < 0:
             logger.error(f"Invalid order parameters: qty={qty}, price={price}")
             return None
         
+        # DRY RUN MODE
         if ProductionConfig.DRY_RUN_MODE:
             return paper_engine.place_order(instrument_key, qty, side, order_type, price)
         
+        # LIVE MODE - validate instrument first
         if not self.validator.validate_contract_exists(instrument_key):
             logger.error(f"Contract validation failed: {instrument_key}")
             return None
@@ -2734,7 +1893,6 @@ class ExecutionEngine:
         for attempt in range(ProductionConfig.MAX_API_RETRIES):
             try:
                 order_api = OrderApiV3(self.api_client)
-                # FIX 10: V3 Order API - Auto-slicing for freeze quantity protection
                 body = upstox_client.PlaceOrderV3Request(
                     quantity=int(qty),
                     product="D",
@@ -2747,7 +1905,7 @@ class ExecutionEngine:
                     disclosed_quantity=0,
                     trigger_price=0.0,
                     is_amo=False,
-                    slice=True  # CRITICAL: Prevents freeze quantity rejection
+                    slice=True
                 )
                 response = order_api.place_order(body)
                 
@@ -2769,9 +1927,12 @@ class ExecutionEngine:
         return None
     
     def get_order_status(self, order_id: str) -> Optional[Dict]:
+        """Get order status from WebSocket (preferred) or REST API (fallback) or paper engine"""
+        # DRY RUN MODE
         if ProductionConfig.DRY_RUN_MODE:
             return paper_engine.get_order_status(order_id)
         
+        # Try WebSocket cache first (zero latency)
         with self.update_lock:
             if order_id in self.order_updates:
                 update = self.order_updates[order_id]
@@ -2781,8 +1942,8 @@ class ExecutionEngine:
                     'filled_qty': int(update.get('filled_quantity', 0))
                 }
         
+        # Fallback to REST API if WebSocket hasn't updated yet
         try:
-            # FIX 12: get_order_details requires api_version as FIRST positional argument
             order_api = OrderApi(self.api_client)
             response = order_api.get_order_details(api_version="2.0", order_id=order_id)
             
@@ -2800,13 +1961,13 @@ class ExecutionEngine:
             return None
     
     def cancel_order(self, order_id: str) -> bool:
-        """Cancel order using V3 API"""
+        """Cancel order with retry (or paper cancel)"""
+        # DRY RUN MODE
         if ProductionConfig.DRY_RUN_MODE:
             return paper_engine.cancel_order(order_id)
         
         for attempt in range(ProductionConfig.MAX_API_RETRIES):
             try:
-                # FIX 15: Cancel order uses OrderApiV3 (not OrderApi)
                 order_api = OrderApiV3(self.api_client)
                 order_api.cancel_order(order_id=order_id)
                 logger.info(f"ORDER CANCELLED: {order_id}")
@@ -2819,11 +1980,7 @@ class ExecutionEngine:
         return False
     
     def place_gtt_order(self, instrument_key: str, qty: int, side: str, stop_loss_price: float, target_price: float) -> Optional[str]:
-        """Place GTT order with proper validation and API compliance"""
-        if ProductionConfig.DRY_RUN_MODE:
-            logger.info("📄 Dry run - skipping GTT placement")
-            return f"PAPER_GTT_{int(time.time())}"
-        
+        """Place GTT with validation"""
         if qty <= 0 or stop_loss_price <= 0 or target_price <= 0:
             logger.error(f"Invalid GTT parameters")
             return None
@@ -2831,22 +1988,11 @@ class ExecutionEngine:
         for attempt in range(ProductionConfig.MAX_API_RETRIES):
             try:
                 order_api = OrderApiV3(self.api_client)
-                
-                # FIX 16: GTT API - Correct trigger types and rule structure
-                # Official docs show: ABOVE/BELOW for triggers, IMMEDIATE for targets
-                sl_trigger = "BELOW" if side == "BUY" else "ABOVE"  # Reverse logic
+                sl_trigger = "BELOW" if side == "BUY" else "ABOVE"  # REVERSED
                 
                 rules = [
-                    upstox_client.GttRule(
-                        strategy="STOPLOSS", 
-                        trigger_type=sl_trigger, 
-                        trigger_price=float(stop_loss_price)
-                    ),
-                    upstox_client.GttRule(
-                        strategy="TARGET", 
-                        trigger_type="IMMEDIATE",  # Must be IMMEDIATE for targets
-                        trigger_price=float(target_price)
-                    )
+                    upstox_client.GttRule(strategy="STOPLOSS", trigger_type=sl_trigger, trigger_price=float(stop_loss_price)),
+                    upstox_client.GttRule(strategy="TARGET", trigger_type="IMMEDIATE", trigger_price=float(target_price))
                 ]
                 
                 body = upstox_client.GttPlaceOrderRequest(
@@ -2874,6 +2020,7 @@ class ExecutionEngine:
         return None
     
     def get_gtt_order_details(self, gtt_id: str) -> Optional[str]:
+        """Get GTT status"""
         try:
             order_api = OrderApiV3(self.api_client)
             response = order_api.get_gtt_order_details(gtt_order_id=gtt_id)
@@ -2887,15 +2034,10 @@ class ExecutionEngine:
             return None
     
     def cancel_gtt_order(self, gtt_id: str) -> bool:
-        """Cancel GTT order with retry logic"""
-        if ProductionConfig.DRY_RUN_MODE:
-            logger.info(f"📄 Dry run - GTT cancel: {gtt_id}")
-            return True
-        
+        """Cancel GTT with retry"""
         for attempt in range(ProductionConfig.MAX_API_RETRIES):
             try:
                 order_api = OrderApiV3(self.api_client)
-                # FIX 17: GTT Cancel - Correct parameter name
                 order_api.cancel_gtt_order(gtt_order_id=gtt_id)
                 logger.info(f"GTT CANCELLED: {gtt_id}")
                 return True
@@ -2906,19 +2048,19 @@ class ExecutionEngine:
         return False
     
     def get_brokerage_impact(self, legs: List[Dict]) -> float:
+        """Calculate total brokerage impact"""
         try:
             charge_api = ChargeApi(self.api_client)
             total_brokerage = 0.0
             
             for leg in legs:
-                # FIX 11: Brokerage API - Must pass api_version as LAST positional argument
                 response = charge_api.get_brokerage(
                     leg['key'],           # instrument_token
                     leg['qty'],           # quantity
                     'D',                  # product
                     leg['side'],          # transaction_type
                     leg['ltp'],           # price
-                    "2.0"                 # api_version - MUST be last positional arg
+                    "2.0"                 # api_version (MUST be last positional)
                 )
                 
                 if response.status == 'success' and response.data and hasattr(response.data, 'charges'):
@@ -2928,19 +2070,13 @@ class ExecutionEngine:
             return total_brokerage
         except Exception as e:
             logger.error(f"Brokerage calculation error: {e}")
-            return 0.0
+            return 0.0  # Conservative: assume zero brokerage if can't calculate
     
     def exit_all_positions(self, tag: Optional[str] = None) -> bool:
-        """Atomic server-side position exit - matches official API"""
-        if ProductionConfig.DRY_RUN_MODE:
-            logger.info("📄 Dry run - skipping atomic exit")
-            return True
-        
+        """Atomic server-side exit"""
         for attempt in range(ProductionConfig.MAX_API_RETRIES):
             try:
                 order_api = OrderApi(self.api_client)
-                # FIX 14: exit_positions() - No parameters per official docs
-                # Official example: api_instance.exit_positions()
                 response = order_api.exit_positions()
                 
                 if response.status == 'success':
@@ -2959,6 +2095,7 @@ class ExecutionEngine:
         return False
     
     def verify_gtt(self, gtt_ids: List[str]) -> bool:
+        """Verify all GTT orders are active"""
         try:
             for gtt_id in gtt_ids:
                 status = self.get_gtt_order_details(gtt_id)
@@ -2973,6 +2110,8 @@ class ExecutionEngine:
             return False
     
     def _execute_leg_atomic(self, leg):
+        """Execute single leg with WebSocket confirmation and strict validation"""
+        # Use tighter pricing for hedges
         tolerance = 0.998 if leg['role'] == 'HEDGE' else (1.002 if leg['side'] == 'BUY' else 0.998)
         limit_price = round(leg['ltp'] * tolerance, 1)
         expected_price = leg['ltp']
@@ -2993,11 +2132,13 @@ class ExecutionEngine:
                 time.sleep(0.2)
                 continue
             
+            # Log status changes
             if status['status'] != last_status:
                 logger.debug(f"Order {order_id}: {status['status']}")
                 last_status = status['status']
             
             if status['status'] == 'complete':
+                # Apply stricter fill tolerance for hedges
                 fill_threshold = ProductionConfig.HEDGE_FILL_TOLERANCE if leg['role'] == 'HEDGE' else ProductionConfig.PARTIAL_FILL_TOLERANCE
                 
                 if status['filled_qty'] < leg['qty'] * fill_threshold:
@@ -3031,10 +2172,12 @@ class ExecutionEngine:
             
             time.sleep(0.2)
         
+        # Timeout - attempt cancellation
         logger.warning(f"TIMEOUT on {order_id}. Attempting cancel...")
         self.cancel_order(order_id)
         time.sleep(1)
         
+        # Final check
         final_status = self.get_order_status(order_id)
         if final_status and final_status['status'] == 'complete':
             leg['entry_price'] = final_status['avg_price']
@@ -3046,13 +2189,17 @@ class ExecutionEngine:
         return None
     
     def execute_strategy(self, legs: List[Dict]) -> List[Dict]:
+        """Execute strategy with production-grade validation"""
+        
+        # Validate total position size
         total_qty = sum(l['qty'] for l in legs)
         if total_qty > ProductionConfig.MAX_CONTRACTS_PER_INSTRUMENT:
             logger.critical(f"Position size {total_qty} exceeds limit {ProductionConfig.MAX_CONTRACTS_PER_INSTRUMENT}")
             telegram.send(f"Position size violation: {total_qty} contracts", "ERROR")
             return []
         
-        if len(legs) >= 4:
+        # Validate max loss per trade
+        if len(legs) >= 4:  # Spread strategy
             strikes = sorted([l['strike'] for l in legs])
             max_spread_width = max(strikes) - min(strikes)
             premium = sum(l['ltp'] * l['qty'] for l in legs if l['side'] == 'SELL') - sum(l['ltp'] * l['qty'] for l in legs if l['side'] == 'BUY')
@@ -3063,10 +2210,12 @@ class ExecutionEngine:
                 telegram.send(f"Max loss violation: ₹{max_loss:,.0f}", "ERROR")
                 return []
         
+        # Pre-flight checks (skip margin check in dry run)
         if not ProductionConfig.DRY_RUN_MODE:
             required_margin = self.check_margin_requirement(legs)
             available_funds = self.get_funds()
             
+            # Apply margin buffer
             usable_funds = available_funds * (1 - ProductionConfig.MARGIN_BUFFER)
             
             if required_margin > usable_funds:
@@ -3074,6 +2223,7 @@ class ExecutionEngine:
                 telegram.send(f"Margin Shortfall: Need {required_margin/100000:.2f}L, Have {usable_funds/100000:.2f}L", "ERROR")
                 return []
             
+            # Brokerage impact check
             projected_premium = sum(l['ltp'] * l['qty'] for l in legs if l['side'] == 'SELL')
             brokerage_cost = self.get_brokerage_impact(legs)
             
@@ -3085,15 +2235,18 @@ class ExecutionEngine:
             brokerage_cost = 0
             logger.info("📄 Dry run - skipping margin and brokerage checks")
         
+        # Validate lot size hasn't changed
         if not self.validator.validate_lot_size(ProductionConfig.NIFTY_KEY, legs[0]['qty'] // 25 if legs else 25):
             logger.error("Lot size validation failed - aborting")
             return []
         
+        # Separate hedges and cores
         hedges = [l for l in legs if l['role'] == 'HEDGE']
         cores = [l for l in legs if l['role'] == 'CORE']
         
         logger.info(f"📋 Execution Plan: {len(hedges)} Hedges → {len(cores)} Cores {'[DRY RUN]' if ProductionConfig.DRY_RUN_MODE else ''}")
         
+        # Execute hedges FIRST in parallel
         hedge_results = []
         if hedges:
             logger.info(f"Executing {len(hedges)} Hedges in Parallel...")
@@ -3107,6 +2260,7 @@ class ExecutionEngine:
                         hedge_results.append(result)
                     else:
                         logger.critical("HEDGE EXECUTION FAILED - ABORTING STRATEGY")
+                        # Flatten any successful hedges before aborting
                         if hedge_results:
                             logger.warning(f"Flattening {len(hedge_results)} filled hedges")
                             self._flatten_legs(hedge_results)
@@ -3119,6 +2273,7 @@ class ExecutionEngine:
         
         logger.info(f"✅ All {len(hedge_results)} Hedges Filled Successfully")
         
+        # Execute cores ONLY after hedges are confirmed
         core_results = []
         if cores:
             logger.info(f"Executing {len(cores)} Cores in Parallel...")
@@ -3143,10 +2298,12 @@ class ExecutionEngine:
         executed = hedge_results + core_results
         structure = executed[0].get('structure', 'UNKNOWN') if executed else 'UNKNOWN'
         
+        # Calculate actual entry metrics
         actual_premium = sum(l['entry_price'] * l['filled_qty'] for l in executed if l['side'] == 'SELL')
         actual_debit = sum(l['entry_price'] * l['filled_qty'] for l in executed if l['side'] == 'BUY')
         net_premium = actual_premium - actual_debit
         
+        # Update daily stats
         db_writer.update_daily_stats(trades=1)
         
         mode_indicator = "📄 PAPER" if ProductionConfig.DRY_RUN_MODE else "💰 LIVE"
@@ -3164,6 +2321,7 @@ class ExecutionEngine:
         return executed
     
     def _flatten_legs(self, legs: List[Dict]):
+        """Emergency flatten with production-grade retry logic"""
         if not legs:
             return
         
@@ -3176,8 +2334,10 @@ class ExecutionEngine:
             
             exit_side = 'SELL' if leg['side'] == 'BUY' else 'BUY'
             
+            # Try multiple strategies for exit
             success = False
             
+            # Strategy 1: Market order (fastest)
             for attempt in range(2):
                 try:
                     oid = self.place_order(leg['key'], leg['filled_qty'], exit_side, "MARKET", 0.0)
@@ -3194,9 +2354,11 @@ class ExecutionEngine:
             if success:
                 continue
             
+            # Strategy 2: Aggressive limit order
             for attempt in range(3):
                 try:
                     exit_price = leg.get('current_ltp', leg['entry_price'])
+                    # Aggressive pricing
                     exit_price = exit_price * 1.10 if exit_side == 'BUY' else exit_price * 0.90
                     
                     oid = self.place_order(leg['key'], leg['filled_qty'], exit_side, "LIMIT", round(exit_price, 1))
@@ -3221,7 +2383,7 @@ class ExecutionEngine:
                 db_writer.log_risk_event("FAILED_EXIT", "CRITICAL", f"Could not close {leg['key']}", "MANUAL_ACTION_REQUIRED")
 
 # ==========================================
-# RISK MANAGER
+# RISK MANAGER (PRODUCTION HARDENED)
 # ==========================================
 class RiskManager:
     def __init__(self, api_client: upstox_client.ApiClient, legs: List[Dict], expiry_date: date, trade_id: str, gtt_ids: List[str] = None):
@@ -3233,10 +2395,12 @@ class RiskManager:
         self.running = True
         self.last_price_update = time.time()
         
+        # Calculate net premium and risk
         credit = sum(l['entry_price'] * l['filled_qty'] for l in legs if l['side'] == 'SELL')
         debit = sum(l['entry_price'] * l['filled_qty'] for l in legs if l['side'] == 'BUY')
         self.net_premium = credit - debit
         
+        # Calculate max risk based on structure
         structure = legs[0].get('structure', 'UNKNOWN')
         if structure == 'IRON_FLY':
             call_strikes = sorted([l['strike'] for l in legs if l['type'] == 'CE'])
@@ -3249,6 +2413,7 @@ class RiskManager:
             else:
                 self.max_spread_loss = self.net_premium * 3
         elif structure == 'IRON_CONDOR':
+            # Calculate max loss for condor
             call_legs = [l for l in legs if l['type'] == 'CE']
             put_legs = [l for l in legs if l['type'] == 'PE']
             
@@ -3263,6 +2428,7 @@ class RiskManager:
         logger.info(f"Risk Manager Init: Trade={trade_id} | Premium=₹{self.net_premium:.2f} | Max Loss=₹{self.max_spread_loss:.2f} | GTTs={len(self.gtt_ids)}")
     
     def monitor(self):
+        """Production-hardened monitoring loop"""
         market_api = upstox_client.MarketQuoteV3Api(self.api_client)
         consecutive_errors = 0
         max_consecutive_errors = 10
@@ -3271,12 +2437,14 @@ class RiskManager:
         
         while self.running:
             try:
+                # DTE exit check
                 days_to_expiry = (self.expiry - date.today()).days
                 if days_to_expiry <= ProductionConfig.EXIT_DTE:
                     logger.info(f"DTE exit trigger: {days_to_expiry} days remaining")
                     self.flatten_all("DTE_EXIT")
                     return
                 
+                # Get live prices with retry
                 keys = [l['key'] for l in self.legs]
                 price_response = None
                 
@@ -3298,20 +2466,25 @@ class RiskManager:
                     time.sleep(ProductionConfig.POLL_INTERVAL)
                     continue
                 
+                # Reset error counter on success
                 consecutive_errors = 0
                 prices = price_response.data
                 self.last_price_update = time.time()
                 
+                # Check for stale prices
                 if time.time() - self.last_price_update > ProductionConfig.PRICE_STALENESS_THRESHOLD:
                     logger.warning("Price data is stale")
                 
+                # Calculate P&L
                 current_pnl = self._calculate_pnl(prices)
                 
+                # Update leg prices
                 for leg in self.legs:
                     if leg['key'] in prices:
                         price_data = prices[leg['key']]
                         leg['current_ltp'] = getattr(price_data, 'last_price', leg['entry_price'])
                 
+                # Risk checks
                 if self.max_spread_loss > 0 and current_pnl < -(self.max_spread_loss * 0.80):
                     logger.critical(f"Max risk breached: P&L={current_pnl:.2f}, Limit={self.max_spread_loss:.2f}")
                     self.flatten_all("STOP_LOSS_MAX_RISK")
@@ -3327,6 +2500,7 @@ class RiskManager:
                     self.flatten_all("TARGET_PROFIT")
                     return
                 
+                # Update dashboard
                 self._update_dashboard_state(current_pnl)
                 
                 time.sleep(ProductionConfig.POLL_INTERVAL)
@@ -3347,9 +2521,11 @@ class RiskManager:
                 time.sleep(5)
     
     def _calculate_pnl(self, prices) -> float:
+        """Calculate current P&L with structure-aware logic"""
         structure = self.legs[0].get('structure', 'UNKNOWN')
         
         if structure == 'IRON_FLY':
+            # For Iron Fly: net spread P&L
             atm_calls = [l for l in self.legs if l['side'] == 'SELL' and l['type'] == 'CE']
             atm_puts = [l for l in self.legs if l['side'] == 'SELL' and l['type'] == 'PE']
             wings = [l for l in self.legs if l['side'] == 'BUY']
@@ -3371,25 +2547,153 @@ class RiskManager:
             return pnl
         
         else:
+            # For other structures: aggregate leg P&L
             pnl = 0.0
             for leg in self.legs:
                 ltp = getattr(prices.get(leg['key']), 'last_price', leg['entry_price'])
                 leg_pnl = (leg['entry_price'] - ltp) * leg['filled_qty'] if leg['side'] == 'SELL' else (ltp - leg['entry_price']) * leg['filled_qty']
                 pnl += leg_pnl
             return pnl
-            # ==========================================
-# STARTUP RECONCILIATION (FIXED)
+    
+    def _update_dashboard_state(self, current_pnl: float):
+        """Update system state with live Greeks and P&L"""
+        try:
+            market_api = upstox_client.MarketQuoteV3Api(self.api_client)
+            keys = [l['key'] for l in self.legs]
+            
+            greek_response = market_api.get_market_quote_option_greek(instrument_key=','.join(keys))
+            
+            if greek_response.status != 'success':
+                return
+            
+            greeks = greek_response.data
+            
+            p_delta = p_theta = p_gamma = p_vega = 0.0
+            
+            for leg in self.legs:
+                direction = -1 if leg['side'] == 'SELL' else 1
+                
+                greek_data = greeks.get(leg['key'])
+                if greek_data and hasattr(greek_data, 'delta'):
+                    p_delta += (greek_data.delta * leg['filled_qty'] * direction)
+                    p_theta += (getattr(greek_data, 'theta', 0) * leg['filled_qty'] * direction)
+                    p_gamma += (getattr(greek_data, 'gamma', 0) * leg['filled_qty'] * direction)
+                    p_vega += (getattr(greek_data, 'vega', 0) * leg['filled_qty'] * direction)
+            
+            pnl_pct = (current_pnl / self.net_premium * 100) if self.net_premium > 0 else 0
+            
+            db_writer.set_state("live_portfolio", json.dumps({
+                "trade_id": self.trade_id,
+                "pnl": round(current_pnl, 2),
+                "pnl_pct": round(pnl_pct, 1),
+                "net_delta": round(p_delta, 2),
+                "net_theta": round(p_theta, 2),
+                "net_gamma": round(p_gamma, 5),
+                "net_vega": round(p_vega, 2),
+                "net_premium": round(self.net_premium, 2),
+                "max_loss": round(self.max_spread_loss, 2),
+                "dte": (self.expiry - date.today()).days,
+                "updated_at": datetime.now().strftime("%H:%M:%S")
+            }))
+        except Exception as e:
+            logger.error(f"Dashboard update error: {e}")
+    
+    def flatten_all(self, reason="SIGNAL"):
+        """Production-hardened exit sequence"""
+        logger.critical(f"🚨 FLATTEN TRIGGERED: {reason}")
+        telegram.send(f"🚨 Position Exit: {reason}", "CRITICAL")
+        
+        # Step 1: Cancel all GTTs FIRST to prevent double-exit
+        gtt_cancelled_count = 0
+        if self.gtt_ids:
+            logger.info(f"Cancelling {len(self.gtt_ids)} GTT orders...")
+            for gtt_id in self.gtt_ids:
+                try:
+                    executor = ExecutionEngine(self.api_client)
+                    if executor.cancel_gtt_order(gtt_id):
+                        gtt_cancelled_count += 1
+                        logger.info(f"Cancelled GTT: {gtt_id}")
+                except Exception as e:
+                    logger.error(f"Failed to cancel GTT {gtt_id}: {e}")
+            
+            # Wait for GTT cancellations to propagate
+            time.sleep(1)
+            logger.info(f"Cancelled {gtt_cancelled_count}/{len(self.gtt_ids)} GTTs")
+        
+        # Step 2: Attempt atomic exit
+        executor = ExecutionEngine(self.api_client)
+        atomic_success = False
+        
+        for attempt in range(2):
+            logger.info(f"Atomic exit attempt {attempt+1}...")
+            if executor.exit_all_positions(tag="VG30"):
+                atomic_success = True
+                logger.info("✅ Atomic exit successful")
+                break
+            time.sleep(2)
+        
+        # Step 3: Fallback to leg-by-leg if atomic failed
+        if not atomic_success:
+            logger.critical("Atomic exit failed - falling back to leg-by-leg")
+            telegram.send("Atomic exit failed - manual closure initiated", "CRITICAL")
+            executor._flatten_legs(self.legs)
+        
+        # Step 4: Calculate final P&L
+        final_pnl = self._get_final_pnl()
+        
+        # Step 5: Update database
+        db_writer.update_trade_exit(self.trade_id, reason, final_pnl)
+        db_writer.log_risk_event("POSITION_EXIT", "INFO", reason, f"P&L: ₹{final_pnl:.2f}")
+        
+        # Step 6: Record result with circuit breaker
+        circuit_breaker.record_trade_result(final_pnl)
+        
+        # Step 7: Send summary
+        telegram.send(
+            f"Position Closed\n"
+            f"Reason: {reason}\n"
+            f"Final P&L: ₹{final_pnl:,.2f}\n"
+            f"Return: {(final_pnl/self.net_premium*100):.1f}%",
+            "SUCCESS" if final_pnl > 0 else "WARNING"
+        )
+        
+        self.running = False
+        logger.info(f"Risk monitor shutdown complete for {self.trade_id}")
+    
+    def _get_final_pnl(self) -> float:
+        """Get final P&L from positions"""
+        try:
+            portfolio_api = PortfolioApi(self.api_client)
+            response = portfolio_api.get_positions(api_version="2.0")
+            
+            if response.status != 'success' or not response.data:
+                logger.warning("Could not fetch final positions - using last known P&L")
+                return 0.0
+            
+            total_pnl = 0.0
+            for position in response.data:
+                if hasattr(position, 'pnl'):
+                    total_pnl += float(position.pnl)
+            
+            return total_pnl
+            
+        except Exception as e:
+            logger.error(f"Error getting final P&L: {e}")
+            return 0.0
+
+# ==========================================
+# STARTUP RECONCILIATION (PRODUCTION HARDENED)
 # ==========================================
 class StartupReconciliation:
     def __init__(self, api_client: upstox_client.ApiClient):
         self.api_client = api_client
     
     def reconcile(self) -> Optional[List[Dict]]:
-        """Reconstruct positions from today's trades with correct expiry"""
+        """Reconstruct positions from live portfolio with proper expiry lookup"""
         try:
             logger.info("Running startup reconciliation...")
             
-            # FIX 2: Added mandatory api_version="2.0"
+            # Get current positions
             portfolio_api = PortfolioApi(self.api_client)
             pos_response = portfolio_api.get_positions(api_version="2.0")
             
@@ -3399,7 +2703,7 @@ class StartupReconciliation:
             
             positions = pos_response.data
             
-            # Build expiry lookup map from contract details
+            # Build expiry lookup from option contracts
             options_api = OptionsApi(self.api_client)
             contract_response = options_api.get_option_contracts(
                 instrument_key=ProductionConfig.NIFTY_KEY
@@ -3410,16 +2714,16 @@ class StartupReconciliation:
                 for contract in contract_response.data:
                     if hasattr(contract, 'instrument_key') and hasattr(contract, 'expiry'):
                         try:
-                            # FIX 5: Handle expiry as datetime object or string
-                            expiry_date = (contract.expiry.date() if hasattr(contract.expiry, 'date') else 
-                                         datetime.strptime(str(contract.expiry).split('T')[0], "%Y-%m-%d").date())
+                            expiry_date = datetime.strptime(
+                                contract.expiry.split('T')[0], "%Y-%m-%d"
+                            ).date()
                             expiry_map[contract.instrument_key] = expiry_date
                         except:
                             pass
             
             logger.info(f"Built expiry map with {len(expiry_map)} contracts")
             
-            # FIX 2: Added mandatory api_version="2.0"
+            # Get today's trades for entry prices
             order_api = OrderApi(self.api_client)
             trade_response = order_api.get_trade_history(api_version="2.0")
             
@@ -3430,6 +2734,7 @@ class StartupReconciliation:
                     if hasattr(trade, 'instrument_token') and hasattr(trade, 'average_price'):
                         trade_prices[trade.instrument_token] = float(trade.average_price)
             
+            # Reconstruct legs
             reconstructed_legs = []
             common_expiry = None
             
@@ -3442,15 +2747,18 @@ class StartupReconciliation:
                 if not instrument_key:
                     continue
                 
+                # Get expiry - CRITICAL FIX
                 expiry = expiry_map.get(instrument_key)
                 if not expiry:
                     logger.warning(f"Could not determine expiry for {instrument_key} - skipping")
                     continue
                 
+                # Validate expiry is not in the past
                 if expiry < date.today():
                     logger.warning(f"Skipping expired position: {instrument_key} expired on {expiry}")
                     continue
                 
+                # Set common expiry from first valid position
                 if common_expiry is None:
                     common_expiry = expiry
                 elif common_expiry != expiry:
@@ -3475,6 +2783,7 @@ class StartupReconciliation:
                 reconstructed_legs.append(leg)
             
             if reconstructed_legs:
+                # Validate we have a common expiry
                 if not common_expiry:
                     logger.error("Could not determine common expiry - aborting reconciliation")
                     return None
@@ -3488,6 +2797,7 @@ class StartupReconciliation:
                     "SYSTEM"
                 )
                 
+                # Add common expiry to all legs
                 for leg in reconstructed_legs:
                     leg['common_expiry'] = common_expiry
                 
@@ -3502,8 +2812,10 @@ class StartupReconciliation:
             return None
     
     def _extract_strike_from_symbol(self, symbol: str) -> float:
+        """Extract strike price from trading symbol"""
         try:
             import re
+            # Match pattern like "24900" in "NIFTY24JAN24900CE"
             match = re.search(r'(\d{5})', symbol)
             if match:
                 return float(match.group(1))
@@ -3512,24 +2824,25 @@ class StartupReconciliation:
             return 0.0
     
     def _extract_option_type(self, symbol: str) -> str:
+        """Extract CE/PE from symbol"""
         return 'CE' if 'CE' in symbol.upper() else 'PE' if 'PE' in symbol.upper() else 'NA'
 
 # ==========================================
-# SESSION MANAGER (WITH SDK FIXES)
+# SESSION MANAGER (PRODUCTION HARDENED)
 # ==========================================
 class SessionManager:
     def __init__(self, api_client: upstox_client.ApiClient):
         self.api_client = api_client
         self.login_api = LoginApi(self.api_client)
         self.last_validation = 0
-        self.validation_interval = 3600
+        self.validation_interval = 3600  # Revalidate every hour
     
     def validate_session(self, force: bool = False) -> bool:
+        """Validate session with caching"""
         if not force and (time.time() - self.last_validation) < self.validation_interval:
             return True
         
         try:
-            # FIX 2: Added mandatory api_version="2.0"
             user_api = upstox_client.UserApi(self.api_client)
             response = user_api.get_profile(api_version="2.0")
             
@@ -3546,6 +2859,7 @@ class SessionManager:
             return self._refresh_token()
     
     def _refresh_token(self) -> bool:
+        """Refresh access token using refresh token"""
         if not ProductionConfig.UPSTOX_REFRESH_TOKEN:
             logger.critical("No refresh token configured - cannot refresh session")
             return False
@@ -3579,9 +2893,11 @@ class SessionManager:
             return False
     
     def check_market_status(self) -> bool:
+        """Check if market is open with caching"""
         try:
             market_api = MarketHolidaysAndTimingsApi(self.api_client)
             
+            # Check market status
             status_response = market_api.get_market_status(exchange='NFO')
             
             if status_response.status == 'success' and status_response.data:
@@ -3590,7 +2906,7 @@ class SessionManager:
                     return True
                 logger.info(f"Market status: {market_status}")
             
-            # FIX 3: Use positional argument instead of keyword argument
+            # Fallback: Check if today is a holiday
             today_str = date.today().strftime("%Y-%m-%d")
             holiday_response = market_api.get_holiday(today_str)
             
@@ -3601,6 +2917,7 @@ class SessionManager:
                         logger.info(f"Market Closed: {getattr(holiday, 'description', 'Holiday')}")
                         return False
             
+            # If no definitive answer, assume open (fail-safe during market hours)
             current_hour = datetime.now().hour
             if 9 <= current_hour <= 15:
                 logger.warning("Could not determine market status - assuming open during market hours")
@@ -3610,11 +2927,97 @@ class SessionManager:
             
         except Exception as e:
             logger.error(f"Market status check failed: {e}")
+            # Conservative: assume market is open during trading hours
             current_hour = datetime.now().hour
             return 9 <= current_hour <= 15
 
 # ==========================================
-# TRADING ORCHESTRATOR
+# PROCESS MANAGER (ZOMBIE CLEANUP)
+# ==========================================
+class ProcessManager:
+    def __init__(self):
+        self.active_processes = []
+        self.lock = threading.Lock()
+    
+    def register_process(self, process: Process):
+        """Register a process for tracking"""
+        with self.lock:
+            self.active_processes.append(process)
+    
+    def cleanup_zombies(self):
+        """Clean up zombie processes"""
+        with self.lock:
+            cleaned = 0
+            for proc in self.active_processes[:]:
+                if not proc.is_alive():
+                    if proc.exitcode is None:
+                        # Zombie process
+                        logger.warning(f"Killing zombie process {proc.pid}")
+                        try:
+                            proc.kill()
+                            proc.join(timeout=1)
+                        except:
+                            pass
+                        cleaned += 1
+                    self.active_processes.remove(proc)
+            
+            if cleaned > 0:
+                logger.info(f"Cleaned {cleaned} zombie processes")
+            
+            if len(self.active_processes) > ProductionConfig.MAX_ZOMBIE_PROCESSES:
+                logger.critical(f"Too many active processes: {len(self.active_processes)}")
+                telegram.send(f"Process leak detected: {len(self.active_processes)} processes", "CRITICAL")
+    
+    def terminate_all(self):
+        """Terminate all tracked processes"""
+        with self.lock:
+            for proc in self.active_processes:
+                if proc.is_alive():
+                    try:
+                        proc.terminate()
+                        proc.join(timeout=5)
+                        if proc.exitcode is None:
+                            proc.kill()
+                    except:
+                        pass
+            self.active_processes.clear()
+        logger.info("All processes terminated")
+
+process_manager = ProcessManager()
+
+# ==========================================
+# HEARTBEAT MONITOR
+# ==========================================
+class HeartbeatMonitor:
+    def __init__(self):
+        self.last_heartbeat = time.time()
+        self.is_alive = True
+        self.lock = threading.Lock()
+    
+    def beat(self):
+        """Record heartbeat"""
+        with self.lock:
+            self.last_heartbeat = time.time()
+            self.is_alive = True
+    
+    def check(self) -> bool:
+        """Check if system is alive"""
+        with self.lock:
+            elapsed = time.time() - self.last_heartbeat
+            if elapsed > ProductionConfig.HEARTBEAT_INTERVAL * 3:
+                logger.critical(f"System heartbeat lost for {elapsed:.0f}s")
+                return False
+            return True
+    
+    def stop(self):
+        """Stop heartbeat"""
+        with self.lock:
+            self.is_alive = False
+
+heartbeat = HeartbeatMonitor()
+
+# ==========================================
+# TRADING ORCHESTRATOR (PRODUCTION HARDENED)
 # ==========================================
 class TradingOrchestrator:
     def __init__(self):
@@ -3635,20 +3038,24 @@ class TradingOrchestrator:
         self.current_trade_id = None
         self.current_risk_manager = None
         
+        # Setup cleanup handlers
         atexit.register(self._cleanup_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
         signal.signal(signal.SIGINT, self._signal_handler)
     
     def _cleanup_handler(self):
+        """Cleanup on exit"""
         logger.info("Cleanup handler triggered")
         heartbeat.stop()
         process_manager.terminate_all()
         db_writer.shutdown()
     
     def _signal_handler(self, signum, frame):
+        """Handle termination signals"""
         logger.critical(f"Received signal {signum}")
         telegram.send(f"System shutdown signal received: {signum}", "CRITICAL")
         
+        # Emergency flatten if positions exist
         if self.current_risk_manager and self.current_risk_manager.running:
             logger.critical("Emergency position exit on shutdown")
             self.current_risk_manager.flatten_all("SYSTEM_SHUTDOWN")
@@ -3657,10 +3064,13 @@ class TradingOrchestrator:
         sys.exit(0)
     
     def run_analysis(self) -> Optional[Dict]:
+        """Run market analysis in separate process with production-grade error handling"""
         logger.info("Starting market analysis process...")
         
+        # Cleanup any existing processes
         process_manager.cleanup_zombies()
         
+        # Terminate existing analytics process if running
         if self.analytics_process and self.analytics_process.is_alive():
             logger.warning("Terminating existing analytics process")
             self.analytics_process.terminate()
@@ -3668,12 +3078,14 @@ class TradingOrchestrator:
             if self.analytics_process.exitcode is None:
                 self.analytics_process.kill()
         
+        # Clear queue
         while not self.analytics_queue.empty():
             try:
                 self.analytics_queue.get_nowait()
             except:
                 break
         
+        # Start new analytics process
         config = {'access_token': ProductionConfig.UPSTOX_ACCESS_TOKEN}
         self.analytics_process = Process(
             target=AnalyticsEngine(self.analytics_queue).run,
@@ -3686,10 +3098,12 @@ class TradingOrchestrator:
         
         logger.info(f"Analytics process started: PID={self.analytics_process.pid}")
         
+        # Wait for result with timeout
         try:
             status, result = self.analytics_queue.get(timeout=ProductionConfig.ANALYTICS_PROCESS_TIMEOUT)
             
             if status == 'success':
+                # Generate mandates
                 weekly_mandate = self.regime_engine.generate_mandate(
                     self.regime_engine.calculate_scores(
                         result['vol_metrics'],
@@ -3768,35 +3182,43 @@ class TradingOrchestrator:
             return None
     
     def execute_best_mandate(self, analysis: Dict) -> Optional[str]:
+        """Execute best mandate with production-grade validation"""
         weekly_mandate = analysis['weekly_mandate']
         monthly_mandate = analysis['monthly_mandate']
         
+        # Choose best mandate
         mandate = weekly_mandate if weekly_mandate.score.composite > monthly_mandate.score.composite else monthly_mandate
         chain = analysis['weekly_chain'] if mandate == weekly_mandate else analysis['monthly_chain']
         vol_metrics = analysis['vol_metrics']
         
         logger.info(f"Selected mandate: {mandate.expiry_type} {mandate.regime_name} (Score: {mandate.score.composite:.2f})")
         
+        # Validate mandate
         if mandate.max_lots == 0:
             logger.info("Mandate is CASH - no trade executed")
             return None
         
+        # Check circuit breaker
         if circuit_breaker.is_active():
             logger.warning("Circuit breaker active - trade blocked")
             telegram.send("Trade blocked by circuit breaker", "WARNING")
             return None
         
+        # Check daily trade limit
         if not circuit_breaker.check_daily_trade_limit():
             logger.warning("Daily trade limit reached - trade blocked")
             telegram.send("Daily trade limit reached", "WARNING")
             return None
         
+        # Validate max capital per trade
         deployable = ProductionConfig.BASE_CAPITAL * (mandate.allocation_pct / 100.0)
         if deployable > ProductionConfig.MAX_CAPITAL_PER_TRADE:
             logger.warning(f"Capping capital: ₹{deployable:,.0f} → ₹{ProductionConfig.MAX_CAPITAL_PER_TRADE:,.0f}")
             deployable = ProductionConfig.MAX_CAPITAL_PER_TRADE
+            # Recalculate max lots
             mandate.max_lots = int(deployable / mandate.risk_per_lot) if mandate.risk_per_lot > 0 else 0
         
+        # Generate strategy legs
         legs = self.strategy_factory.generate(mandate, chain, analysis['lot_size'], vol_metrics, vol_metrics.spot)
         if not legs:
             logger.error("Failed to generate valid strategy legs")
@@ -3805,12 +3227,14 @@ class TradingOrchestrator:
         
         logger.info(f"Generated {len(legs)} legs for {mandate.suggested_structure}")
         
+        # Execute strategy
         filled_legs = self.execution_engine.execute_strategy(legs)
         if not filled_legs:
             logger.error("Strategy execution failed")
             telegram.send("Execution failed - no position opened", "ERROR")
             return None
         
+        # Create trade record
         trade_id = f"VG30_{'PAPER' if ProductionConfig.DRY_RUN_MODE else 'LIVE'}_{int(datetime.now().timestamp())}"
         self.current_trade_id = trade_id
         
@@ -3827,6 +3251,7 @@ class TradingOrchestrator:
             mandate.risk_per_lot * mandate.max_lots
         )
         
+        # Setup GTT orders for short legs (skip in dry run)
         gtt_ids = []
         if not ProductionConfig.DRY_RUN_MODE:
             short_legs = [l for l in filled_legs if l['side'] == 'SELL']
@@ -3834,8 +3259,9 @@ class TradingOrchestrator:
             if short_legs:
                 logger.info(f"Setting up GTT orders for {len(short_legs)} short legs...")
                 for leg in short_legs:
-                    sl_price = leg['entry_price'] * 2.0
-                    target_price = leg['entry_price'] * 0.30
+                    # Conservative stop loss
+                    sl_price = leg['entry_price'] * 2.0  # 100% loss on premium
+                    target_price = leg['entry_price'] * 0.30  # 70% profit
                     
                     gtt_id = self.execution_engine.place_gtt_order(
                         leg['key'],
@@ -3850,14 +3276,16 @@ class TradingOrchestrator:
                     else:
                         logger.warning(f"GTT placement failed for {leg['key']}")
                 
+                # Verify GTTs
                 if gtt_ids:
-                    time.sleep(2)
+                    time.sleep(2)  # Allow GTTs to activate
                     if not self.execution_engine.verify_gtt(gtt_ids):
                         logger.critical("GTT verification failed - consider manual monitoring")
                         telegram.send("⚠️ GTT verification failed - position at risk", "WARNING")
         else:
             logger.info("📄 Dry run - skipping GTT setup")
         
+        # Start risk manager
         self.current_risk_manager = RiskManager(
             self.api_client,
             filled_legs,
@@ -3878,36 +3306,42 @@ class TradingOrchestrator:
         return trade_id
     
     def run_auto_mode(self):
+        """Production auto-trading loop with comprehensive error handling"""
         logger.info("=" * 80)
         logger.info("STARTING AUTO MODE - PRODUCTION")
         logger.info("=" * 80)
         telegram.send("🤖 Auto-trading activated (Production Hardened)", "SYSTEM")
         
+        # Session validation
         if not self.session_manager.validate_session(force=True):
             logger.critical("Session validation failed - cannot start")
             telegram.send("Session invalid - system stopped", "CRITICAL")
             return
         
+        # Market status check
         if not self.session_manager.check_market_status():
             logger.info("Market is closed today")
             telegram.send("Market closed - no trading today", "SYSTEM")
             return
         
+        # Startup reconciliation
         logger.info("Running startup reconciliation...")
         existing_positions = self.reconciliation.reconcile()
         
         if existing_positions:
             logger.warning(f"Found {len(existing_positions)} existing positions - attaching risk manager")
             
+            # Get common expiry from reconciled positions
             common_expiry = existing_positions[0].get('common_expiry', date.today())
             trade_id = f"RECONCILED_{int(time.time())}"
             
+            # Create risk manager for existing positions (no GTTs)
             self.current_risk_manager = RiskManager(
                 self.api_client,
                 existing_positions,
                 common_expiry,
                 trade_id,
-                []
+                []  # No GTTs for reconciled positions
             )
             
             risk_thread = threading.Thread(
@@ -3917,174 +3351,303 @@ class TradingOrchestrator:
             )
             risk_thread.start()
             
-            logger.info(f"Risk manager attached to trade {trade_id}")
-
-        # ==========================================
-        # MAIN TRADING LOOP
-        # ==========================================
-        logger.info("Entering main trading loop...")
+            logger.info("Risk manager attached to existing positions")
         
+        # Main trading loop
+        loop_count = 0
         while True:
             try:
-                # 1. Heartbeat & Process Health Check
-                heartbeat.beat()
-                process_manager.cleanup_zombies()
+                loop_count += 1
+                loop_start_time = time.time()
                 
-                # 2. Session Validation (Every 30 mins)
-                if int(time.time()) % 1800 == 0:
+                # Update heartbeat
+                heartbeat.beat()
+                
+                # Periodic session validation
+                if loop_count % 60 == 0:  # Every ~60 iterations (minutes)
                     if not self.session_manager.validate_session():
-                        logger.critical("Session invalid - attempting urgent refresh")
-                        if not self.session_manager.validate_session(force=True):
-                            telegram.send("Session died - stopping auto mode", "CRITICAL")
-                            break
-
-                # 3. Time & Market Status Checks
+                        logger.critical("Session validation failed during loop")
+                        telegram.send("Session expired - stopping auto-trading", "CRITICAL")
+                        break
+                
+                # Cleanup zombie processes periodically
+                if loop_count % 10 == 0:
+                    process_manager.cleanup_zombies()
+                
+                # Periodic position reconciliation (every 5 minutes)
+                if loop_count % (ProductionConfig.POSITION_RECONCILE_INTERVAL // 60) == 0 and loop_count > 0:
+                    logger.debug("Running periodic position reconciliation...")
+                    if not ProductionConfig.DRY_RUN_MODE:
+                        reconciled = self.reconciliation.reconcile()
+                        if reconciled and not self.current_risk_manager:
+                            logger.warning("Found untracked positions - attaching risk manager")
+                            common_expiry = reconciled[0].get('common_expiry', date.today())
+                            self.current_risk_manager = RiskManager(
+                                self.api_client,
+                                reconciled,
+                                common_expiry,
+                                f"RECONCILED_{int(time.time())}",
+                                []
+                            )
+                            threading.Thread(target=self.current_risk_manager.monitor, daemon=True).start()
+                
+                # Weekend check
                 now = datetime.now()
-                if now.weekday() >= 5: # Saturday/Sunday
-                    logger.info("Weekend - Sleeping 1 hour")
+                if now.weekday() >= 5:
+                    logger.debug("Weekend - sleeping")
                     time.sleep(3600)
                     continue
-
+                
+                # Trading hours check
                 current_time = (now.hour, now.minute)
-                
-                # Market Closed
-                if current_time >= ProductionConfig.MARKET_CLOSE:
-                    logger.info("Market closed. System shutting down.")
-                    telegram.send("Market closed - System shutdown", "SYSTEM")
-                    break
-                
-                # Pre-Market / Outside Safe Hours
                 if not (ProductionConfig.SAFE_ENTRY_START <= current_time <= ProductionConfig.SAFE_EXIT_END):
-                    if int(time.time()) % 60 == 0:
-                        logger.info("Waiting for safe entry time...")
-                    time.sleep(10)
-                    continue
-
-                # 4. Existing Position Check
-                # If we have a risk manager running, we rely on it to tell us when it's done
-                if self.current_risk_manager and self.current_risk_manager.running:
-                    # Update vitals while waiting
-                    db_writer.update_system_vitals(
-                        0, psutil.cpu_percent(), psutil.virtual_memory().percent
-                    )
-                    time.sleep(ProductionConfig.POLL_INTERVAL)
-                    continue
-                else:
-                    # Risk manager finished or doesn't exist. Reset references.
-                    self.current_risk_manager = None
-                    self.current_trade_id = None
-
-                # 5. Circuit Breaker Check
-                if circuit_breaker.is_active():
-                    logger.warning("Circuit breaker active - waiting for cooldown")
+                    if loop_count % 60 == 0:
+                        logger.debug(f"Outside trading hours: {current_time}")
                     time.sleep(60)
                     continue
-
-                # 6. Run Analysis (If interval passed)
-                should_run_analysis = False
-                if not self.last_analysis:
-                    should_run_analysis = True
-                else:
-                    age = (datetime.now() - self.last_analysis['timestamp']).seconds
-                    if age >= ProductionConfig.ANALYSIS_INTERVAL:
-                        should_run_analysis = True
                 
-                if should_run_analysis:
-                    analysis = self.run_analysis()
+                # Check for open positions
+                portfolio_api = PortfolioApi(self.api_client)
+                pos_response = None
+                
+                for attempt in range(3):
+                    try:
+                        pos_response = portfolio_api.get_positions(api_version="2.0")
+                        if pos_response and pos_response.status == 'success':
+                            break
+                    except Exception as e:
+                        logger.error(f"Position check failed (attempt {attempt+1}): {e}")
+                        time.sleep(1)
+                
+                has_open_positions = False
+                if pos_response and pos_response.status == 'success' and pos_response.data:
+                    for p in pos_response.data:
+                        qty = int(p.quantity) if hasattr(p, 'quantity') else 0
+                        if qty != 0:
+                            has_open_positions = True
+                            break
+                
+                if has_open_positions:
+                    if loop_count % 60 == 0:
+                        logger.debug("Positions already open - monitoring active")
+                    time.sleep(60)
+                    continue
+                
+                # Check if analysis is fresh
+                if self.last_analysis:
+                    age = (datetime.now() - self.last_analysis['timestamp']).total_seconds()
+                    if age < ProductionConfig.ANALYSIS_INTERVAL:
+                        if loop_count % 60 == 0:
+                            logger.debug(f"Analysis fresh ({age:.0f}s old)")
+                        time.sleep(60)
+                        continue
+                
+                # Run analysis
+                logger.info(f"Running market analysis (loop {loop_count})...")
+                analysis = self.run_analysis()
+                
+                if not analysis:
+                    logger.warning("Analysis failed - waiting before retry")
+                    time.sleep(600)  # Wait 10 minutes before retry
+                    continue
+                
+                # Execute trade
+                trade_id = self.execute_best_mandate(analysis)
+                
+                if trade_id:
+                    logger.info(f"Trade {trade_id} opened - monitoring active")
                     
-                    if analysis:
-                        # 7. Execute Trade if Mandate found
-                        trade_id = self.execute_best_mandate(analysis)
-                        if not trade_id:
-                            logger.info("No trade executed based on mandate")
-                    else:
-                        logger.warning("Analysis returned no results")
-
-                # 8. Sleep small interval to prevent CPU spike
-                time.sleep(1)
-
+                    # Wait for position to close before next cycle
+                    position_closed = False
+                    wait_start = time.time()
+                    max_wait = 86400  # 24 hours max
+                    
+                    while not position_closed and (time.time() - wait_start) < max_wait:
+                        heartbeat.beat()
+                        
+                        pos_response = None
+                        for attempt in range(3):
+                            try:
+                                pos_response = portfolio_api.get_positions(api_version="2.0")
+                                if pos_response and pos_response.status == 'success':
+                                    break
+                            except:
+                                time.sleep(1)
+                        
+                        all_closed = True
+                        if pos_response and pos_response.status == 'success' and pos_response.data:
+                            for p in pos_response.data:
+                                qty = int(p.quantity) if hasattr(p, 'quantity') else 0
+                                if qty != 0:
+                                    all_closed = False
+                                    break
+                        
+                        if all_closed:
+                            position_closed = True
+                            logger.info("Position closed - ready for next trade")
+                            break
+                        
+                        time.sleep(60)
+                    
+                    if not position_closed:
+                        logger.warning("Position still open after 24h - continuing anyway")
+                else:
+                    logger.info("No trade executed - waiting for next analysis cycle")
+                    time.sleep(ProductionConfig.ANALYSIS_INTERVAL)
+                
+                # Update system vitals
+                loop_duration = (time.time() - loop_start_time) * 1000
+                db_writer.update_system_vitals(
+                    loop_duration,
+                    psutil.cpu_percent(interval=0.1),
+                    psutil.virtual_memory().percent
+                )
+                
             except KeyboardInterrupt:
-                logger.info("User stopped auto mode")
+                logger.info("Auto-trading stopped by user")
+                telegram.send("Auto-trading stopped by user", "SYSTEM")
                 break
+                
             except Exception as e:
-                logger.error(f"Main loop error: {e}")
+                logger.error(f"Auto-trading loop error: {e}")
                 traceback.print_exc()
-                telegram.send(f"Main loop error: {str(e)}", "ERROR")
-                time.sleep(60)
+                telegram.send(f"Loop error: {str(e)}", "ERROR")
+                time.sleep(300)  # Wait 5 minutes after error
+        
+        logger.info("Auto-trading loop exited")
+        self._cleanup_handler()
 
 # ==========================================
 # MAIN ENTRY POINT
 # ==========================================
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="VOLGUARD 3.0 - PRODUCTION HARDENED")
-    parser.add_argument('--mode', choices=['analysis', 'auto', 'paper'], default='analysis')
-    parser.add_argument('--dry-run', action='store_true', help="Force dry run mode")
+    parser = argparse.ArgumentParser(description="VOLGUARD 3.0 - Production Hardened")
+    parser.add_argument('--mode', choices=['analysis', 'auto'], default='analysis', help='Run mode')
+    parser.add_argument('--skip-confirm', action='store_true', help='Skip confirmation for auto mode')
+    parser.add_argument('--export-journal', type=str, help='Export trade journal to directory')
     args = parser.parse_args()
     
-    # Override Config if Dry Run argument is passed
-    if args.dry_run:
-        ProductionConfig.DRY_RUN_MODE = True
+    # Banner
+    print("=" * 80)
+    print("VOLGUARD 3.0 - PRODUCTION HARDENED")
+    print("Advanced Option Selling System")
+    if ProductionConfig.DRY_RUN_MODE:
+        print("🎯 DRY RUN MODE - NO REAL TRADES")
+    print("=" * 80)
     
+    # Export journal if requested
+    if args.export_journal:
+        os.makedirs(args.export_journal, exist_ok=True)
+        if db_writer.export_trade_journal(args.export_journal):
+            print(f"✅ Trade journal exported to {args.export_journal}")
+        else:
+            print("❌ Export failed")
+        return
+    
+    # Validate configuration
     try:
         ProductionConfig.validate()
-        logger.info(f"Configuration validated (Env: {ProductionConfig.ENVIRONMENT})")
+        logger.info("✅ Configuration validated")
     except Exception as e:
-        logger.critical(f"Configuration error: {e}")
+        logger.critical(f"❌ Configuration error: {e}")
         sys.exit(1)
     
-    # Initialize Database
-    db_writer.set_state("system_version", "3.0-PATCHED")
-    db_writer.set_state("startup_time", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    # Initialize system
+    db_writer.set_state("system_version", "3.0-PRODUCTION-HARDENED")
+    db_writer.set_state("startup_time", datetime.now().isoformat())
+    db_writer.set_state("dry_run_mode", str(ProductionConfig.DRY_RUN_MODE))
+    logger.info("✅ Database initialized (WAL Mode)")
     
-    msg_mode = "PAPER TRADING" if ProductionConfig.DRY_RUN_MODE else "LIVE TRADING"
-    telegram.send(f"🚀 System Startup: VOLGUARD 3.0\nMode: {msg_mode}", "SYSTEM")
+    telegram.send(
+        f"🚀 System Startup\n"
+        f"Version: 3.0 Production Hardened\n"
+        f"Mode: {args.mode.upper()}\n"
+        f"Environment: {ProductionConfig.ENVIRONMENT}\n"
+        f"{'📄 DRY RUN - Paper Trading' if ProductionConfig.DRY_RUN_MODE else '💰 LIVE TRADING'}",
+        "SUCCESS"
+    )
     
+    # Create orchestrator
     orchestrator = TradingOrchestrator()
     
     try:
         if args.mode == 'analysis':
             logger.info("Running ANALYSIS mode")
             result = orchestrator.run_analysis()
+            
             if result:
-                logger.info("=" * 80)
+                print("\n" + "=" * 80)
+                print("MARKET ANALYSIS RESULTS")
+                print("=" * 80)
+                
                 w = result['weekly_mandate']
                 m = result['monthly_mandate']
-                logger.info(f"WEEKLY:  {w.regime_name:<20} | Score: {w.score.composite:.1f} | {w.suggested_structure}")
-                logger.info(f"MONTHLY: {m.regime_name:<20} | Score: {m.score.composite:.1f} | {m.suggested_structure}")
-                logger.info("=" * 80)
+                
+                print(f"\n📊 WEEKLY MANDATE")
+                print(f"Regime: {w.regime_name}")
+                print(f"Strategy: {w.suggested_structure}")
+                print(f"Score: {w.score.composite:.2f} ({w.score.confidence})")
+                print(f"Allocation: {w.allocation_pct:.1f}% | Max Lots: {w.max_lots}")
+                print(f"Rationale: {', '.join(w.rationale)}")
+                if w.warnings:
+                    print(f"Warnings: {', '.join(w.warnings)}")
+                
+                print(f"\n📊 MONTHLY MANDATE")
+                print(f"Regime: {m.regime_name}")
+                print(f"Strategy: {m.suggested_structure}")
+                print(f"Score: {m.score.composite:.2f} ({m.score.confidence})")
+                print(f"Allocation: {m.allocation_pct:.1f}% | Max Lots: {m.max_lots}")
+                print(f"Rationale: {', '.join(m.rationale)}")
+                if m.warnings:
+                    print(f"Warnings: {', '.join(m.warnings)}")
+                
+                print("\n" + "=" * 80)
+            else:
+                print("❌ Analysis failed")
                 
         elif args.mode == 'auto':
             if ProductionConfig.DRY_RUN_MODE:
-                logger.info("⚠️ STARTING IN DRY RUN / PAPER MODE")
+                logger.info("🎯 Starting AUTO MODE in DRY RUN (Paper Trading)")
                 orchestrator.run_auto_mode()
             else:
-                bypass_confirm = os.getenv("VG_AUTO_CONFIRM", "FALSE")
-                if bypass_confirm == "TRUE":
-                    logger.warning("⚠️ LIVE TRADING AUTO-CONFIRMED")
+                bypass_confirm = os.getenv("VG_AUTO_CONFIRM", "FALSE").upper() == "TRUE"
+                
+                if bypass_confirm or args.skip_confirm:
+                    logger.warning("⚠️ AUTO CONFIRMATION - LIVE TRADING ENABLED")
                     orchestrator.run_auto_mode()
                 else:
-                    print("="*60)
-                    print("⚠️  WARNING: LIVE TRADING MODE")
-                    print("="*60)
-                    if input("Type 'LIVE' to confirm real money trading: ") == "LIVE":
-                        orchestrator.run_auto_mode()
-                    else:
-                        logger.info("Startup cancelled by user")
-                        
+                    print("\n" + "=" * 80)
+                    print("⚠️  LIVE AUTO MODE REQUESTED")
+                    print("=" * 80)
+                    print("\nThis will enable live trading with REAL MONEY.")
+                    print("Ensure you understand the risks involved.")
+                    print("\nType 'I ACCEPT THE RISK' to continue: ")
+                    
+                    try:
+                        user_input = input().strip()
+                        if user_input == "I ACCEPT THE RISK":
+                            orchestrator.run_auto_mode()
+                        else:
+                            logger.info("Auto mode cancelled by user")
+                            print("Cancelled.")
+                    except EOFError:
+                        logger.critical("No input available. Set VG_AUTO_CONFIRM=TRUE or use --skip-confirm")
+                        sys.exit(1)
+                    
     except Exception as e:
-        logger.critical(f"Fatal error: {e}")
+        logger.critical(f"Unhandled exception: {e}")
         traceback.print_exc()
-        telegram.send(f"System crashed: {str(e)}", "CRITICAL")
+        telegram.send(f"💥 System crashed: {str(e)}", "CRITICAL")
         sys.exit(1)
         
     finally:
-        logger.info("System shutdown initiated...")
+        logger.info("System shutdown sequence initiated")
         heartbeat.stop()
         process_manager.terminate_all()
         db_writer.shutdown()
         telegram.send("System shutdown complete", "SYSTEM")
+        logger.info("Goodbye.")
 
 if __name__ == "__main__":
-    multiprocessing.freeze_support()
     main()
